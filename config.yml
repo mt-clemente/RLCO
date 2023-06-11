@@ -1,0 +1,51 @@
+separate_value_training: True
+unit: 'torch.half'
+cuda: True
+categorical_token_vocab_size: 23
+dim_token: 4
+max_num_segments: 256
+
+# -------------------- NETWORK SETTINGS -------------------- 
+
+networks:
+
+  dim_embed: 20
+  gae_lambda: 0.9
+  value_weight: 0.5
+  policy_weight: 1
+  pointer: true
+  entropy_weight: 0.08
+
+  actor:  
+    hidden_size: 512
+    n_encoder_layers: 4
+    n_decoder_layers: 4
+    nhead: 40
+    optimizer:
+      lr: 1.0e-4
+
+  critic:  
+    hidden_size: 512
+    n_encoder_layers: 4
+    n_decoder_layers: 4
+    nhead: 40
+    optimizer:
+      lr: 1.0e-4
+
+
+# --------------------  SETTINGS -------------------- 
+
+training:
+
+  epochs: 3
+  num_workers: 8
+  checkpoint_period: 100
+  minibatch_size: 27
+  horizon: 99
+  opt_epsilon: 1.0e-4
+  gamma: 0.94
+  clip_eps: 0.16
+
+  stop_criterion:
+    type: 'inf'
+
