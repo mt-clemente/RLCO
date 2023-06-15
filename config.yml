@@ -1,20 +1,15 @@
-separate_value_training: True
 unit: 'torch.half'
 cuda: True
-categorical_token_vocab_size: 23
-dim_token: 4
-max_num_segments: 256
+log_every: 20
+# categorical_token_vocab_size: 23
+# dim_token: 4
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
 networks:
 
   dim_embed: 20
-  gae_lambda: 0.9
-  value_weight: 0.5
-  policy_weight: 1
   pointer: true
-  entropy_weight: 0.08
 
   actor:  
     hidden_size: 512
@@ -37,6 +32,11 @@ networks:
 
 training:
 
+  separate_value_training: True
+  gae_lambda: 0.9
+  value_weight: 0.5
+  policy_weight: 1
+  entropy_weight: 0.08
   epochs: 3
   num_workers: 8
   checkpoint_period: 100
