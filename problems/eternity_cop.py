@@ -1,6 +1,6 @@
 from pathlib import Path
 import torch
-from cop_class import COPInstanceBatch, COProblem, COPInstance, InstanceBatchManager
+from cop_class import COPInstanceBatch, COProblem, COPInstance
 from eternity.eternity import EternityPuzzle
 from eternity.utils import initialize_sol
 from torch import nn
@@ -9,8 +9,8 @@ from einops import rearrange
 
 class Eternity(COProblem):
 
-    def __init__(self, dim_embedding, device=None, parallel=False) -> None:
-        super().__init__(dim_embedding, device, parallel)
+    def __init__(self, dim_embedding, device=None) -> None:
+        super().__init__(dim_embedding, device)
 
         assert not dim_embedding % 4 
 
@@ -32,27 +32,27 @@ class Eternity(COProblem):
     
 
     # TODO: Fix kwargs
-    def act(self, actions:torch.Tensor, instance_batch:COPInstanceBatch,step:int, **kwargs) -> tuple():
+    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:int, **kwargs) -> tuple:
 
-        rewards = torch.zeros(len(instance_batch),instance_batch.device)
-        new_states = torch.empty_like(instance_batch.states)
+        rewards = torch.zeros(len(states),states.device)
+        new_states = torch.empty_like(states)
 
-        for i, (state, segments, size, action) in enumerate(zip(
-            instance_batch.states,
-            instance_batch.segments,
-            actions,
-            instance_batch.kwargs['size']
+        for i, (state, segment, step, size) in enumerate(zip(
+            states,
+            segments,
+            steps,
+            kwargs['size']
             )):
 
 
-            n_state, reward = self.place_tile(state,segments[action],size,step)
+            n_state, reward = self.place_tile(state,segment,size,step)
 
             new_states[i] = n_state
             rewards[i] = reward
 
-        return new_states, reward
+        return new_states, rewards
     
-    def tokenize(self, instance:COPInstance) -> torch.Tensor:
+    def tokenize(self, instance:COPInstance) -> tuple[torch.Tensor,torch.Tensor]:
 
         state_ = self.color_embedding(instance.state)
         segments_ = self.color_embedding(instance.segments)

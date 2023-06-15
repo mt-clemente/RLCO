@@ -4,10 +4,11 @@ import torch
 
 class COPInstance():
 
-    def __init__(self,state,segments,**kwargs) -> None:
+    def __init__(self,state,segments,size,**kwargs) -> None:
         self.state = state
         self.segments = segments
         self.kwargs = kwargs
+        self.size = size
 
 class COPInstanceBatch():
     """
@@ -16,8 +17,8 @@ class COPInstanceBatch():
 
     def __init__(self,instances:list[COPInstance],device) -> None:
 
-        self.states = [i.state for i in self.instances]
-        self.segments = [i.segments for i in self.instances]
+        self.states = [i.state for i in instances]
+        self.segments = [i.segments for i in instances]
         self.device = device
 
         # All the istances are supposed to be of the same problem,
@@ -48,21 +49,14 @@ class COPInstanceBatch():
 class COProblem(ABC):
     """
     Abstract class to define Combinatorial Optimization problems.
-    If parallel is set to True, the rollouts will be able to be processed at the same time
-    on one compute node. This enables us to have separate environements with optimal memory
-    usage, as we do not have to store multiple workers, meaning that we only store the model
-    parameters once.
-
-    The 'parallel' flag is true by default. If the problem state can be represented as a
-    tensor, and the states can be incremented in parallel it provides a huge speedup in 
-    trajectory collection. If not, specify parllel=False, but this will slow down training
-    significantly.
 
     """
 
-    def __init__(self, dim_embedding, device=None,parallel=True) -> None:
+    def __init__(self, dim_embedding, cfg=None, device=None,reuse_segments=False) -> None:
+
+        self.cfg = cfg
         self.dim_embedding = dim_embedding
-        self.parallel = parallel
+        self.reuse_segments = reuse_segments
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -74,22 +68,17 @@ class COProblem(ABC):
 
 
 
-    def load_instance(self,path:Path):
-        instance = self._load_instance(path)
+    def load_instance_(self,path:Path):
+        instance = self.load_instance(path)
 
         if self.num_segments is None:
             raise ValueError("The max number of solution segments has not been set")
         
-        if isinstance(instance.state, torch.Tensor) and not self.parallel:
-            print(UserWarning("The instance states are torch tensors, but the parallel"
-            " flag is set to False. If the actions can be parallelized, change parallel to"
-            " True to speed up training"))
-
         return instance
 
 
     @abstractmethod
-    def _load_instance(self,path:Path) -> COPInstance:
+    def load_instance(self,path:Path) -> COPInstance:
         """
         Loads the instance from the specified path.
         Needs to return a list of solution segments
@@ -97,12 +86,8 @@ class COProblem(ABC):
         raise NotImplementedError
     
 
-
-
-    
-
     @abstractmethod
-    def act(self,instances:COPInstanceBatch,**kwargs) -> tuple():
+    def act(self,states,segments,steps,**kwargs) -> tuple:
         """
         Increments the current state of the solution by adding one segment chosen
         based on the current policy. It takes in the action and the state and returns a tuple:
@@ -142,67 +127,74 @@ class COProblem(ABC):
 
 
     @abstractmethod
-    def valid_action_mask(self,state) -> torch.BoolTensor:
+    def valid_action_mask(self,instances:COPInstanceBatch) -> torch.BoolTensor:
         """
         Outputs a mask that is True if an action is valid from the current state,
         and false if it is not.
         """
 
+        raise NotImplementedError
+
+    def valid_action_mask_(self,instances:COPInstanceBatch,used_mask:torch.Tensor=None):
+
+        if self.reuse_segments:
+            return self.valid_action_mask(instances)
+
+        else:
+            return torch.logical_and(self.valid_action_mask(instances),used_mask)
 
 
 
 
-class InstanceBatchManager():
 
-    def __init__(self,instances_path:Path,problem:COProblem) -> None:
+# class InstanceBatchManager():
 
-        self.pb = problem
+#     def __init__(self,instances_path:Path,problem:COProblem) -> None:
 
+#         self.pb = problem
         
-        instances = []
-        for file in instances_path.iterdir():
-            inst = self.pb.load_instance(file)
-            instances.append(inst)
+#         instances = []
+#         for file in instances_path.iterdir():
+#             inst = self.pb.load_instance(file)
+#             instances.append(inst)
 
-            if max_inst_size < len(inst):
-                max_inst_size = len(inst)
+#         self.instances = instances
 
-        self.instances = instances
-
-        if problem.parallel:
-            self.states = torch.vstack([i.state for i in self.instances])
-            self.segments = torch.vstack([i.segments for i in self.instances])
+#         if isinstance(self.states[0],torch.Tensor) and isinstance(self.segments[0],torch.Tensor):
+#             self.states = torch.vstack([i.state for i in self.instances])
+#             self.segments = torch.vstack([i.segments for i in self.instances])
+#             self.sizes= torch.tensor([i.size for i in self.instances])
 
 
-        self.num_instances = len(instances)
-        self.max_inst_size = max_inst_size
-        self.instance_lengths = torch.tensor([len(x) for x in self.instances]).unsqueeze(0)
+#         self.num_instances = len(instances)
+#         self.max_inst_size = max([i.size for i in self.instances])
+#         self.instance_lengths = torch.tensor([len(x) for x in self.instances]).unsqueeze(0)
 
 
 
-    def get_padding_masks(self):
+#     def get_padding_masks(self):
 
-        # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_inst_size) > self.instance_lengths
-        base_tgt_key_padding_mask = src_key_padding_mask.clone()
+#         # pad to get all max length sequences
+#         src_key_padding_mask = torch.arange(self.max_inst_size) > self.instance_lengths
+#         base_tgt_key_padding_mask = src_key_padding_mask.clone()
 
 
-        return src_key_padding_mask, base_tgt_key_padding_mask
+#         return src_key_padding_mask, base_tgt_key_padding_mask
     
 
-    def get_tokens_batch(self):
-        """
-        Returns a matrix containing the tokens of all the instances in the batch
-        and a list of the corresponding instance sizes.
-        """
+#     def get_tokens_batch(self):
+#         """
+#         Returns a matrix containing the tokens of all the instances in the batch
+#         and a list of the corresponding instance sizes.
+#         """
 
-        token_batch = torch.zeros(self.num_instances,self.max_inst_size)
+#         token_batch = torch.zeros(self.num_instances,self.max_inst_size)
 
-        for i,ins in enumerate(self.instances):
-            tokens = self.pb.tokenize(ins)
-            token_batch[i,:self.instance_lengths[i]] = tokens
+#         for i,ins in enumerate(self.instances):
+#             tokens = self.pb.tokenize(ins)
+#             token_batch[i,:self.instance_lengths[i]] = tokens
 
-        return token_batch, self.instance_lengths
+#         return token_batch, self.instance_lengths
 
 
 

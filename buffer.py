@@ -42,14 +42,18 @@ class Buffer():
         self.state_buf = torch.zeros((self.num_instances,self.capacity,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
         if not self.init_state is None:
             self.state_buf[0] = self.init_state
+        
+        self.horzion_states = torch.empty((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
+        self.horzion_timesteps = torch.empty(self.num_instances,device=self.device,dtype=int)
         self.act_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
-        self.rtg_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.policy_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
-        self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_ep_len4),dtype=bool,device=self.device)
+        self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_ep_len),dtype=bool,device=self.device)
         self.rew_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.final_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
-        self.adv_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.timestep_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=int)
         self.ptr = 0
+
+        # self.adv_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
+        # self.rtg_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
 
 

@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from buffer import Buffer
-
 from layers import MaskedStableSoftmax, Pointer, PositionalEncoding, Transformer
 
 
@@ -51,7 +49,7 @@ class ActorCritic(nn.Module):
 
         self.positional_encoding = PositionalEncoding(self.dim_embed)
         self.embed_state_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
-        self.embed_tile_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
+        self.embed_segment_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
 
         if cfg['separate_value_training']:
             act_opt_cfg = cfg['actor']['optimizer']
@@ -62,28 +60,42 @@ class ActorCritic(nn.Module):
         else:
             self.optimizer = init_optimizer(self,opt_cfg=cfg['optimizer'])
 
+    def make_transformer_inputs(self,states,segments, timesteps):
 
-    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask):
+        
+        batch_size = states.shape[0]
 
-        batch_size = embedded_states.shape[0]
-        timesteps_ = timesteps.unsqueeze(-1)
+        embedded_segments = self.embed_segment(segments)
+        embedded_states = self.embed_state(states)
 
-        embedded_segments = self.embed_segment(segment_tokens)
-        embedded_states = self.embed_state(state_tokens)
 
         embedded_states += self.positional_encoding(embedded_states)
 
-        src_inputs = self.embed_tile_ln(embedded_segments)
+        src_inputs = self.embed_segment_ln(embedded_segments)
         tgt_inputs = self.embed_state_ln(embedded_states)
 
-        tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps_.device).repeat(batch_size,1) > timesteps_
+        tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps
 
+        return src_inputs, tgt_inputs,  tgt_key_padding_mask
+
+
+
+    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks):
+
+        timesteps = timesteps.unsqueeze(-1)
+
+        src_inputs, tgt_inputs,  tgt_key_padding_mask = self.make_transformer_inputs(
+            states=state_tokens,
+            segments=segment_tokens,
+            timesteps=timesteps
+        )
 
         policy_pred = self.actor.forward(
                 src_inputs=src_inputs,
                 tgt_inputs=tgt_inputs,
                 timesteps=timesteps,
                 valid_action_mask=valid_action_mask,
+                src_key_padding_mask=src_key_padding_masks,
                 tgt_key_padding_mask=tgt_key_padding_mask
         )
 
@@ -92,7 +104,7 @@ class ActorCritic(nn.Module):
     def get_value(self, state_tokens, segment_tokens, timesteps):
 
 
-        batch_size = embedded_states.shape[0]
+        batch_size = state_tokens.shape[0]
         timesteps_ = timesteps.unsqueeze(-1)
 
         embedded_segments = self.embed_segment(segment_tokens)
@@ -201,7 +213,7 @@ class Actor(nn.Module):
         return policy_pred
 
 
-class Critic():
+class Critic(nn.Module):
 
     def __init__(self, cfg, dim_embed, device, unit) -> None:
         

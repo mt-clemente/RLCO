@@ -30,7 +30,11 @@ class Transformer(nn.Module):
 
 
         memory = self.transformer.encoder(src,src_key_padding_mask=src_key_padding_mask)
-        output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask,tgt_key_padding_mask=tgt_key_padding_mask.half()*-1e6)
+
+        if tgt_key_padding_mask is None:
+            output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask)
+        else:
+            output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask,tgt_key_padding_mask=tgt_key_padding_mask.half()*-1e6)
 
         if self.return_mem:
             return output, memory

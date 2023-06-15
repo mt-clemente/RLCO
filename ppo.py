@@ -6,16 +6,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from torch.utils.data import DataLoader
+from torch.utils.data import TensorDataset,DataLoader
 
 from actor_critic import ActorCritic
 from buffer import Buffer
-from cop_class import InstanceBatchManager, COProblem
+from cop_class import COProblem
 from utils import TrainingManager, load_config
 
 DEBUG = False
 
 class PPOTrainer():
+
+    # The passed problem is a
 
     # TODO: 
     #  - look at where to put the init state
@@ -23,17 +25,23 @@ class PPOTrainer():
     #  - add different types of policy sampling (prob, max, topk, etc.)
 
 
-    def __init__(self, config_path:Path,problem:COProblem,eval_model_dir:Path=None,load_list:list=None) -> None:
+    def __init__(self, config_path:Path,instances_path:Path,problem:COProblem,eval_model_dir:Path=None,load_list:list=None) -> None:
 
         self.cfg = load_config(config_path)
-        self.pb = problem
+
+        try:
+            self.pb:COProblem = problem(self.cfg['problem'])
+
+        except KeyError:
+            self.pb:COProblem = problem()
+
         device = 'cuda' if torch.cuda.is_available() and (self.cfg['cuda']) else 'cpu'
 
-        max_inst_size = 0
+        self.manager = TrainingManager(self.cfg['training'],instances_path,self.pb,device=device)
 
         self.agent = PPOAgent(
             cfg=self.cfg,
-            max_instance_size=max_inst_size,
+            max_instance_size=self.manager.max_inst_size,
             eval_model_dir=eval_model_dir,
             device=device,
             load_list=load_list
@@ -41,26 +49,21 @@ class PPOTrainer():
 
         self.buf = Buffer(
             cfg=self.cfg,
-            ep_len=max_inst_size,
+            num_instances=self.manager.num_instances,
+            max_ep_len=self.manager.max_inst_size,
             device=device,
         )
 
 
-    def train(self,instances_path:Path):
-
-
-        instance_batch = InstanceBatchManager(instances_path,self.pb)
-        manager = TrainingManager(instance_batch)
+    def train(self):
 
         try:
-            while manager.stop_criterion():
+            while self.manager.stop_criterion():
 
-                current_state = self.rollout(manager)
-                self.agent.update()
+                self.rollout(self.manager)
+                self.agent.update(self.buf,self.manager)
                 
-                manager.step(current_state)
-
-                if manager.episode % self.cfg['checkpoint_period']:
+                if self.manager.episode % self.cfg['checkpoint_period']:
                     #TODO: Save models
                     pass
         
@@ -76,40 +79,54 @@ class PPOTrainer():
         (
             states,
             segments,
-            step
+            steps
 
         ) = manager.get_training_state()
 
+
         for _ in range(manager.horizon):
             
-            action_mask = self.pb.valid_action_mask(states)
+            
+            action_masks = self.pb.valid_action_mask_(states,manager.masks)
 
             policy = self.agent.get_policy(
                 state_tokens=states,
                 segment_tokens=segments,
-                timesteps=step,
-                valid_action_mask=action_mask, # TODO: just action mask
+                timesteps=steps,
+                valid_action_mask=action_masks,
+                src_key_padding_masks=manager.src_key_padding_masks
             )
 
             new_states, rewards, probs, actions = self.increment_states(
                 states=states,
-                tokens=segments,
-                policy=policy
+                segments=segments,
+                policies=policy,
+                steps=steps
             )
 
-            manager.step(new_states)
 
             self.buf.push(
-                state=new_states,
+                state=states,
                 policy=probs,
                 action=actions,
+                mask=action_masks,
                 reward=rewards,
-                ep_step=manager.step,
-                final=manager.get_final()
+                ep_step=steps,
+                final=manager.get_finals()
             )
         
+            states = new_states
+
+            # update finals / masks based on actions taken
+            manager.step(actions)
+
+        # inject the states at the end of the horizon, needed to calculate advantages
+        manager.finalize_rollout(states)
+        self.buf.horzion_states = states
+        self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
+
         
-    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor):
+    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps):
         """
         Adds the tokens selected by the policies to the current states.
         Returns new states, associated rewards, probabilities for each action w.r.t the current
@@ -120,17 +137,10 @@ class PPOTrainer():
         """
 
         actions = torch.multinomial(policies,1)
-        added_tokens = segments[torch.arange(segments,device=segments.device),actions]
-        new_states, rewards = self.pb.act(states,added_tokens)
+        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
+        new_states, rewards = self.pb.act(states,added_tokens,steps)
 
         return new_states, rewards, policies[actions], actions
-
-
-
-
-
-
-
 
 
 
@@ -139,20 +149,28 @@ class PPOAgent(nn.Module):
     # - add scheduler support
     # - add separate process workers on top of simple parallel workers
 
+    # FIXME: UNIT FIXME: UNIT FIXME: UNIT FIXME: UNIT FIXME: UNIT
+
     def __init__(self,cfg, max_instance_size, init_state = None, eval_model_dir = None, device = None,load_list=None):
         super().__init__()
 
-        self.train_cfg = cfg['training']
+        self.train_cfg:dict = cfg['training']
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
         else:
             self.device = device
 
+        if "grad_clip" in self.train_cfg.keys():
+            self.grad_clip = self.train_cfg['grad_clip']
+        
+        else:
+            self.grad_clip = False
+
         self.model = ActorCritic(
-            cfg['network'],
-            init_state,
+            cfg=cfg['network'],
             num_segments=max_instance_size,
+            init_state=init_state,
             device=device
         )
 
@@ -160,18 +178,82 @@ class PPOAgent(nn.Module):
             self.load_model(eval_model_dir,load_list)
 
 
-    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask):
+    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks):
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
             segment_tokens=segment_tokens,
             timesteps=timesteps,
-            valid_action_mask=valid_action_mask
+            valid_action_mask=valid_action_mask,
+            src_key_padding_masks=src_key_padding_masks
         )
 
         return policy
+    
+    def compute_gae_rtg(self,  buf:Buffer, gamma, gae_lambda,segments,src_key_padding_masks):
 
-    def update(self,loader:DataLoader):
+        # if (self.cur) % self.horizon != 0:
+        #     raise BufferError("Calculating GAE at wrong time")
+        #     pass
+
+        # State dims are [instance,step,state,token]
+        states = torch.cat((buf.state_buf,buf.horzion_states),dim=1)
+        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps))
+        rewards = buf.rew_buf
+        finals = buf.final_buf
+
+        values = torch.tensor()
+
+        for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
+
+            src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
+                states=state_step,
+                segments=segments,
+                timesteps=timestep_step
+            )
+
+            value_step = self.model.critic.forward(
+                src_inputs=src_inputs,
+                tgt_inputs=tgt_inputs,
+                timesteps=timestep_step,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                src_key_padding_masks=src_key_padding_masks
+            )
+
+            values[i] = value_step
+
+
+        next_values = values[1,:]
+        values = values[:,-1]
+
+
+        # FIXME: Check if there is a problem with the new shapes
+
+
+        td_errors = rewards + gamma * next_values * (1 - finals) - values
+        gae = 0
+        advantages = torch.zeros_like(td_errors)
+
+        for t in reversed(range(len(td_errors))):
+            gae = td_errors[t] + gamma * gae_lambda * (1 - finals[t]) * gae
+            advantages[t] = gae
+
+
+        returns_to_go = torch.zeros_like(rewards)
+        return_to_go = next_values[-1]
+        returns_to_go[-1] = return_to_go
+        for t in reversed(range(len(rewards)-1)):
+            return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
+            returns_to_go[t] = return_to_go 
+
+        advantages = advantages
+        returns_to_go = returns_to_go
+
+        return advantages, returns_to_go
+
+
+
+    def update(self,buf:Buffer,manager:TrainingManager):
         """
         Updates the ppo agent, using the trajectories in the memory buffer.
         For states, policy, rewards, advantages, and timesteps the data is in a 
@@ -186,9 +268,30 @@ class PPOAgent(nn.Module):
 
         # FIXME: calculate advantages / RTGs
 
+        
+        advantages, returns = self.compute_gae_rtg(
+            buf,
+            self.train_cfg['gamma'],
+            self.train_cfg['gae_lambda'],
+            manager.segments
+        )
+
+
+        dataset = TensorDataset(
+            buf.state_buf,
+            buf.act_buf,
+            buf.mask_buf,
+            buf.policy_buf,
+            buf.timestep_buf,
+            advantages,
+            returns,
+        )
+
+
+        loader = DataLoader(dataset, batch_size=self.train_cfg['minibatch_size'], shuffle=True, drop_last=False)
 
         # Perform multiple update epochs
-        for k in range(self.epochs):
+        for k in range(self.train_cfg['epochs']):
             for batch in loader:
 
                 (
@@ -216,7 +319,7 @@ class PPOAgent(nn.Module):
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
                 old_action_probs = batch_old_policies.gather(1, batch_actions.unsqueeze(1))
                 ratio = action_probs / (old_action_probs + 1e-5)
-                clipped_ratio = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps)
+                clipped_ratio = torch.clamp(ratio, 1 - self.train_cfg['clip_eps'], 1 + self.train_cfg['clip_eps'])
                 surrogate1 = ratio * batch_advantages.unsqueeze(1)
                 surrogate2 = clipped_ratio * batch_advantages.unsqueeze(1)
                 policy_loss = -torch.min(surrogate1, surrogate2).mean()
@@ -225,11 +328,38 @@ class PPOAgent(nn.Module):
 
                 # Calculate entropy bonus
                 entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(dim=-1).mean()
-                entropy_loss = -self.entropy_weight * entropy
+                entropy_loss = -self.train_cfg['entropy_weight'] * entropy
                 # Compute total loss and update parameters
 
 
-                loss = policy_loss + value_loss + entropy_loss
+
+                
+                if self.train_cfg['separate_value_training']:
+
+                    pol_loss = policy_loss + entropy_loss
+                    val_loss = value_loss
+
+                    self.model.actor_optimizer.zero_grad()
+                    self.model.critic_optimizer.zero_grad()
+
+                    pol_loss.backward()
+                    val_loss.backward()
+
+                    if self.grad_clip:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.grad_clip)
+
+                    self.model.actor_optimizer.step()
+                    self.model.critic_optimizer.step()
+
+                else:
+                    
+                    loss = policy_loss + value_loss + entropy_loss
+                    self.model.optimizer.zero_grad()
+                    loss.backward()
+                  
+                    if self.grad_clip:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.grad_clip)
+                  
                 if DEBUG:
                     print(f"---- EPOCH {k} ----")
                     print("ba",batch_actions.max())
@@ -242,36 +372,23 @@ class PPOAgent(nn.Module):
                     print("bret",batch_returns.min())
                     print("bp",batch_policy.max())
                     print("bp",batch_policy.min())
-                    print("Loss",entropy_loss.item(),value_loss.item(),policy_loss.item(),loss)
+                    print("Loss",entropy_loss.item(),value_loss.item(),policy_loss.item())
                     print("ratio",ratio.max())
                     print("ratio",ratio.min())
-                    print("ratio",((ratio > 1 + self.ac_cfg['clip_eps']).count_nonzero() + (ratio < 1 - self.ac_cfg['CLIP_EPS']).count_nonzero()))
+                    # print("ratio",((ratio > 1 + self.ac_cfg['clip_eps']).count_nonzero() + (ratio < 1 - self.ac_cfg['CLIP_EPS']).count_nonzero()))
                     print("bst",batch_states.max())
                     print("bst",batch_states.min())
+                    self.model.optimizer.step()
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(),0.5)
-                self.optimizer.step()
-                self.scheduler.step()
-                g=0
-                i = 0
-                for name,param in self.model.named_parameters():
-                    i+=1
-                    # print(f"{name:>28} - {torch.norm(param.grad)}")
-                    # print(f"{name:>28}")
-                    g+=torch.norm(param.grad)
 
         print(datetime.now()-t0)
         wandb.log({
-            "Total loss":loss,
             "Current learning rate":self.scheduler.get_last_lr()[0],
-            "Cumul grad norm":g,
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
             "Value repartition":batch_value.squeeze(-1).detach(),
-            "KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
+            "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })
 
 
