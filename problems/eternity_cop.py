@@ -32,9 +32,9 @@ class Eternity(COProblem):
     
 
     # TODO: Fix kwargs
-    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:int, **kwargs) -> tuple:
+    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:torch.IntTensor, **kwargs) -> tuple:
 
-        rewards = torch.zeros(len(states),states.device)
+        rewards = torch.zeros(len(states),device=states.device)
         new_states = torch.empty_like(states)
 
         for i, (state, segment, step, size) in enumerate(zip(
@@ -81,7 +81,9 @@ class Eternity(COProblem):
         # size = state.size()[0] - 2
         best_conflict = -10
         best_connect = -1
+        best_state = None
         best_reward = None
+
         for _ in range(4):
             tile = tile.roll(self.color_embedding_size,-1)
             state[step // size + 1, step % size + 1,:] = tile
@@ -92,6 +94,7 @@ class Eternity(COProblem):
                 best_connect = connect
                 best_conflict = conflicts
                 best_reward = reward
+
 
         return best_state, best_conflict
 

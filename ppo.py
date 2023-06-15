@@ -1,5 +1,6 @@
 import copy
 from pathlib import Path
+from einops import rearrange, repeat
 import torch
 from datetime import datetime
 import torch
@@ -171,11 +172,14 @@ class PPOAgent(nn.Module):
             cfg=cfg['network'],
             num_segments=max_instance_size,
             init_state=init_state,
-            device=device
+            device=self.device
         )
 
         if not eval_model_dir is None:
             self.load_model(eval_model_dir,load_list)
+
+    def load_model(self,eval_model_dir:Path,load_list:list):
+        raise NotImplementedError
 
 
     def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks):
@@ -202,7 +206,7 @@ class PPOAgent(nn.Module):
         rewards = buf.rew_buf
         finals = buf.final_buf
 
-        values = torch.tensor()
+        values = torch.tensor((states.size(0),states.size(1)+1))
 
         for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
 
@@ -217,14 +221,14 @@ class PPOAgent(nn.Module):
                 tgt_inputs=tgt_inputs,
                 timesteps=timestep_step,
                 tgt_key_padding_mask=tgt_key_padding_mask,
-                src_key_padding_masks=src_key_padding_masks
+                src_key_padding_mask=src_key_padding_masks
             )
 
             values[i] = value_step
 
 
-        next_values = values[1,:]
-        values = values[:,-1]
+        next_values = values[:,1:]
+        values = values[:,:-1]
 
 
         # FIXME: Check if there is a problem with the new shapes
@@ -266,25 +270,23 @@ class PPOAgent(nn.Module):
 
         t0 = datetime.now()
 
-        # FIXME: calculate advantages / RTGs
-
-        
         advantages, returns = self.compute_gae_rtg(
-            buf,
-            self.train_cfg['gamma'],
-            self.train_cfg['gae_lambda'],
-            manager.segments
+            buf=buf,
+            gamma=self.train_cfg['gamma'],
+            gae_lambda=self.train_cfg['gae_lambda'],
+            segments=manager.segments,
+            src_key_padding_masks=manager.src_key_padding_masks
         )
 
-
         dataset = TensorDataset(
-            buf.state_buf,
-            buf.act_buf,
-            buf.mask_buf,
-            buf.policy_buf,
-            buf.timestep_buf,
-            advantages,
-            returns,
+            rearrange(buf.state_buf,'i s p t -> (i s) p t'),
+            rearrange(buf.act_buf,'i s -> (i s)'),
+            rearrange(buf.mask_buf,'i s m -> (i s) m'),
+            rearrange(buf.policy_buf,'i s m -> (i s) m'),
+            rearrange(buf.timestep_buf,'i s -> (i s)'),
+            rearrange(advantages,'i s -> (i s)'),
+            rearrange(returns,'i s -> (i s)'),
+            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(buf.state_buf.size(1))
         )
 
 
@@ -298,18 +300,28 @@ class PPOAgent(nn.Module):
                     batch_states,
                     batch_actions,
                     batch_masks,
-                    batch_advantages,
                     batch_old_policies,
-                    batch_returns,
                     batch_timesteps,
+                    batch_advantages,
+                    batch_returns,
+                    instance_ids
                     
                 ) = batch
 
-                
-                batch_policy, batch_value = self.model(
+                src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
                     batch_states,
+                    manager.segments[instance_ids],
                     batch_timesteps,
-                    batch_masks,
+                )
+                
+                batch_policy, batch_value = self.model.actor.forward(
+                    src_inputs=src_inputs,
+                    tgt_inputs=tgt_inputs,
+                    timesteps=batch_timesteps,
+                    src_key_padding_mask=manager.src_key_padding_masks[instance_ids],
+                    tgt_key_padding_mask=tgt_key_padding_mask,
+                    valid_action_mask=batch_masks
+
                 )
 
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)

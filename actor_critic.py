@@ -112,7 +112,7 @@ class ActorCritic(nn.Module):
 
         embedded_states += self.positional_encoding(embedded_states)
 
-        src_inputs = self.embed_tile_ln(embedded_segments)
+        src_inputs = self.embed_segment_ln(embedded_segments)
         tgt_inputs = self.embed_state_ln(embedded_states)
 
         tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps_.device).repeat(batch_size,1) > timesteps_

@@ -95,7 +95,6 @@ class COProblem(ABC):
         
         """
 
-        #FIXME: IMPLEMENT token passing to act
         raise NotImplementedError
 
 
