@@ -16,132 +16,10 @@ from utils import TrainingManager, load_config
 
 DEBUG = False
 
-class PPOTrainer():
-
-    # The passed problem is a
-
-    # TODO: 
-    #  - look at where to put the init state
-    #  - add separate worker processes
-    #  - add different types of policy sampling (prob, max, topk, etc.)
-
-
-    def __init__(self, config_path:Path,instances_path:Path,problem:COProblem,eval_model_dir:Path=None,load_list:list=None) -> None:
-
-        self.cfg = load_config(config_path)
-
-        try:
-            self.pb:COProblem = problem(self.cfg['problem'])
-
-        except KeyError:
-            self.pb:COProblem = problem()
-
-        device = 'cuda' if torch.cuda.is_available() and (self.cfg['cuda']) else 'cpu'
-
-        self.manager = TrainingManager(self.cfg['training'],instances_path,self.pb,device=device)
-
-        self.agent = PPOAgent(
-            cfg=self.cfg,
-            max_instance_size=self.manager.max_inst_size,
-            eval_model_dir=eval_model_dir,
-            device=device,
-            load_list=load_list
-        )
-
-        self.buf = Buffer(
-            cfg=self.cfg,
-            num_instances=self.manager.num_instances,
-            max_ep_len=self.manager.max_inst_size,
-            device=device,
-        )
-
-
-    def train(self):
-
-        try:
-            while self.manager.stop_criterion():
-
-                self.rollout(self.manager)
-                self.agent.update(self.buf,self.manager)
-                
-                if self.manager.episode % self.cfg['checkpoint_period']:
-                    #TODO: Save models
-                    pass
-        
-        except KeyboardInterrupt:
-            pass
-
-        # TODO: save solution
 
 
 
-    def rollout(self,manager:TrainingManager):
 
-        (
-            states,
-            segments,
-            steps
-
-        ) = manager.get_training_state()
-
-
-        for _ in range(manager.horizon):
-            
-            
-            action_masks = self.pb.valid_action_mask_(states,manager.masks)
-
-            policy = self.agent.get_policy(
-                state_tokens=states,
-                segment_tokens=segments,
-                timesteps=steps,
-                valid_action_mask=action_masks,
-                src_key_padding_masks=manager.src_key_padding_masks
-            )
-
-            new_states, rewards, probs, actions = self.increment_states(
-                states=states,
-                segments=segments,
-                policies=policy,
-                steps=steps
-            )
-
-
-            self.buf.push(
-                state=states,
-                policy=probs,
-                action=actions,
-                mask=action_masks,
-                reward=rewards,
-                ep_step=steps,
-                final=manager.get_finals()
-            )
-        
-            states = new_states
-
-            # update finals / masks based on actions taken
-            manager.step(actions)
-
-        # inject the states at the end of the horizon, needed to calculate advantages
-        manager.finalize_rollout(states)
-        self.buf.horzion_states = states
-        self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
-
-        
-    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps):
-        """
-        Adds the tokens selected by the policies to the current states.
-        Returns new states, associated rewards, probabilities for each action w.r.t the current
-        policy, and the actions (chosen action indexes).
-
-        TODO: For the parallel version, the states are tensors, might need to add support for Any 
-        types
-        """
-
-        actions = torch.multinomial(policies,1)
-        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
-        new_states, rewards = self.pb.act(states,added_tokens,steps)
-
-        return new_states, rewards, policies[actions], actions
 
 
 
@@ -152,10 +30,20 @@ class PPOAgent(nn.Module):
 
     # FIXME: UNIT FIXME: UNIT FIXME: UNIT FIXME: UNIT FIXME: UNIT
 
-    def __init__(self,cfg, max_instance_size, init_state = None, eval_model_dir = None, device = None,load_list=None):
+    def __init__(self,
+                 cfg:dict,
+                 max_instance_size,pb:COProblem,
+                 buf:Buffer,
+                 init_state = None,
+                 eval_model_dir = None,
+                 device = None,load_list=None
+                 ):
+        
         super().__init__()
 
         self.train_cfg:dict = cfg['training']
+        self.pb = pb
+        self.buf = buf
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
@@ -182,7 +70,9 @@ class PPOAgent(nn.Module):
         raise NotImplementedError
 
 
-    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks):
+    def get_policy(self, states, segments, timesteps, valid_action_mask,src_key_padding_masks):
+
+        state_tokens, segment_tokens = self.pb.tokenize(states,segments)
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
@@ -255,9 +145,76 @@ class PPOAgent(nn.Module):
 
         return advantages, returns_to_go
 
+    def rollout(self,manager:TrainingManager):
+
+        (
+            states,
+            segments,
+            steps
+
+        ) = manager.get_training_state()
 
 
-    def update(self,buf:Buffer,manager:TrainingManager):
+        for _ in range(manager.horizon):
+            
+            
+            action_masks = self.pb.valid_action_mask_(states,segments,manager.masks)
+
+            policy = self.get_policy(
+                states=states,
+                segments=segments,
+                timesteps=steps,
+                valid_action_mask=action_masks,
+                src_key_padding_masks=manager.src_key_padding_masks,
+            )
+
+            new_states, rewards, probs, actions = self.increment_states(
+                states=states,
+                segments=segments,
+                policies=policy,
+                steps=steps
+            )
+
+
+            self.buf.push(
+                state=states,
+                policy=probs,
+                action=actions,
+                mask=action_masks,
+                reward=rewards,
+                ep_step=steps,
+                final=manager.get_finals()
+            )
+        
+            states = new_states
+
+            # update finals / masks based on actions taken
+            manager.step(actions)
+
+        # inject the states at the end of the horizon, needed to calculate advantages
+        manager.finalize_rollout(states)
+        self.buf.horzion_states = states
+        self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
+
+        
+    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps):
+        """
+        Adds the tokens selected by the policies to the current states.
+        Returns new states, associated rewards, probabilities for each action w.r.t the current
+        policy, and the actions (chosen action indexes).
+
+        TODO: For the parallel version, the states are tensors, might need to add support for Any 
+        types
+        """
+
+        actions = torch.multinomial(policies,1)
+        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
+        new_states, rewards = self.pb.act(states,added_tokens,steps)
+
+        return new_states, rewards, policies[actions], actions
+
+
+    def update(self,manager:TrainingManager):
         """
         Updates the ppo agent, using the trajectories in the memory buffer.
         For states, policy, rewards, advantages, and timesteps the data is in a 
@@ -271,7 +228,7 @@ class PPOAgent(nn.Module):
         t0 = datetime.now()
 
         advantages, returns = self.compute_gae_rtg(
-            buf=buf,
+            buf=self.buf,
             gamma=self.train_cfg['gamma'],
             gae_lambda=self.train_cfg['gae_lambda'],
             segments=manager.segments,
@@ -279,14 +236,14 @@ class PPOAgent(nn.Module):
         )
 
         dataset = TensorDataset(
-            rearrange(buf.state_buf,'i s p t -> (i s) p t'),
-            rearrange(buf.act_buf,'i s -> (i s)'),
-            rearrange(buf.mask_buf,'i s m -> (i s) m'),
-            rearrange(buf.policy_buf,'i s m -> (i s) m'),
-            rearrange(buf.timestep_buf,'i s -> (i s)'),
+            rearrange(self.buf.state_buf,'i s p t -> (i s) p t'),
+            rearrange(self.buf.act_buf,'i s -> (i s)'),
+            rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
+            rearrange(self.buf.policy_buf,'i s m -> (i s) m'),
+            rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
-            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(buf.state_buf.size(1))
+            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.state_buf.size(1))
         )
 
 
@@ -307,6 +264,8 @@ class PPOAgent(nn.Module):
                     instance_ids
                     
                 ) = batch
+
+                # FIXME: self. wtf??
 
                 src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
                     batch_states,

@@ -1,8 +1,8 @@
 from pathlib import Path
 import torch
 from cop_class import COPInstanceBatch, COProblem, COPInstance
-from eternity.eternity import EternityPuzzle
-from eternity.utils import initialize_sol
+from .eternity.eternity import EternityPuzzle
+from .eternity.utils import initialize_sol, toseq, fromseq
 from torch import nn
 from einops import rearrange
 
@@ -28,7 +28,7 @@ class Eternity(COProblem):
         pz = EternityPuzzle(path)
         state, tiles, _, n_tiles = initialize_sol(pz,self.device)
         self.num_segments = n_tiles
-        return COPInstance(state,tiles,size = int(n_tiles**0.5))
+        return COPInstance(toseq(state).int(),tiles.int(),size = n_tiles,num_segments=n_tiles-1)
     
 
     # TODO: Fix kwargs
@@ -52,19 +52,22 @@ class Eternity(COProblem):
 
         return new_states, rewards
     
-    def tokenize(self, instance:COPInstance) -> tuple[torch.Tensor,torch.Tensor]:
+    def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
 
-        state_ = self.color_embedding(instance.state)
-        segments_ = self.color_embedding(instance.segments)
+        state_ = self.color_embedding(states.int())
+        segments_ = self.color_embedding(segments.int())
 
-        state_tokens = rearrange(state_, "b h w e -> (b h w) e")
-        segment_tokens = rearrange(segments_, "b h w e -> b (h w) e")
+        state_tokens = rearrange(state_, "b s t e -> b s (t e)")
+        segment_tokens = rearrange(segments_, "b s t e -> b s (t e)")
+
+        print(state_tokens.size())
+        print(segment_tokens.size())
 
         return state_tokens, segment_tokens
     
-    def valid_action_mask(self, state) -> torch.BoolTensor:
+    def valid_action_mask(self, state,segments) -> torch.BoolTensor:
         # TODO:
-        return super().valid_action_mask(state)
+        return super().valid_action_mask(state,segments)
 
 
     # GAME UTILS

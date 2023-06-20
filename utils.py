@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 import yaml
 from cop_class import COProblem
+import torch.nn.functional as F
 
 class TrainingManager():
     """
@@ -24,7 +25,7 @@ class TrainingManager():
 
         self.device = device
         self.pb = problem
-        self.cfg
+        self.cfg = cfg
 
         # Batch mgt
         instances = []
@@ -33,21 +34,37 @@ class TrainingManager():
             instances.append(inst)
 
         self.instances = instances
+        self.max_inst_size = max([i.size for i in self.instances])
+        self.max_num_segments = max([len(i.segments) for i in self.instances])
+        self.num_instances = len(instances)
+        self.segment_size = self.instances[0].state.size(-1)
 
-        if isinstance(self.states[0],torch.Tensor) and isinstance(self.segments[0],torch.Tensor):
-            self.states = torch.vstack([i.state for i in self.instances])
-            self.segments = torch.vstack([i.segments for i in self.instances])
 
+        # TODO: Init state mgt
+        if isinstance(self.instances[0].state,torch.Tensor) and isinstance(self.instances[0].segments,torch.Tensor):
+
+            self.states = torch.zeros((self.num_instances,self.max_inst_size,self.segment_size),device=device)
+            self.segments = torch.zeros((self.num_instances,self.max_num_segments,self.segment_size),device=device)
+
+            for i, instance in enumerate(self.instances):
+                
+                state = instance.state
+                segments = instance.segments
+
+                self.states[i,:instance.size] = state
+                self.segments[i,:len(instance.segments)] = segments
+
+            self.dim_token = self.states.size(-1)
+
+                
         self.sizes= torch.tensor([i.size for i in self.instances])
         self.init_states = copy.deepcopy(self.states)
 
+        self.instance_lengths = torch.tensor([x.size for x in self.instances])
+        self.instance_num_segments = torch.tensor([x.num_segments for x in self.instances])
 
-        self.base_masks, self.src_key_padding_masks = self.init_masks()
-        self.masks = self.base_masks.clone()
-
-        self.num_instances = len(instances)
-        self.max_inst_size = max([i.size for i in self.instances])
-        self.instance_lengths = torch.tensor([len(x) for x in self.instances])
+        self.src_key_padding_masks = self.init_masks()
+        self.masks = self.src_key_padding_masks.clone()
 
         self.reset()
 
@@ -67,13 +84,15 @@ class TrainingManager():
         
     def stop_criterion(self):
 
-        match self.cfg['stop_type']:
+        stop_cfg = self.cfg['stop_criterion']
+
+        match stop_cfg['type']:
 
             case 'inf':
                 return True
             
             case 'ep':
-                return self.episode > self.cfg['n_ep']
+                return self.episode > stop_cfg['n_ep']
             
 
 
@@ -95,7 +114,7 @@ class TrainingManager():
         # New episode
         finals = self.curr_step == self.instance_lengths
         self.states[finals] = self.init_states
-        self.masks[finals] = self.base_masks
+        self.masks[finals] = self.src_key_padding_masks
 
         # FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:
         if self.curr_step >= self.max_inst_size: #FIXME: +- 1?
@@ -106,17 +125,19 @@ class TrainingManager():
     def finalize_rollout(self,states):
         self.states = states
 
-
-
     def init_masks(self):
         
         # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_inst_size, device=self.device) > self.instance_lengths
-        base_tgt_key_padding_mask = src_key_padding_mask.clone()
-
-
-        return src_key_padding_mask, base_tgt_key_padding_mask
+        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) > self.instance_num_segments.unsqueeze(-1)
+        
+        return src_key_padding_mask
     
+    def causal_mask(self):
+
+        ep_steps = self.curr_step % self.instance_lengths
+        causal_mask = torch.arange(self.num_instances,device=self.device).expand((self.num_instances,-1)) > ep_steps.unsqueeze_(-1)
+
+        return causal_mask
 
     def get_tokens_batch(self):
         """
@@ -137,9 +158,15 @@ class TrainingManager():
         return self.curr_step % self.instance_lengths
 
     def get_finals(self):
-
         return self.curr_step % self.instance_lengths == 0
 
+    def batch_attributes(self):
+        return (
+            self.num_instances,
+            self.max_inst_size,
+            self.max_num_segments,
+            self.dim_token
+        )
 
 
 
@@ -150,9 +177,22 @@ def load_config(path:Path):
     with open(path, 'r') as yaml_file:
         cfg = yaml.safe_load(yaml_file)
 
-
-    if not cfg['networks']['dim_embed'] % cfg['networks']['actor']['nhead']:
+    if cfg['network']['dim_embed'] % cfg['network']['actor']['nhead']:
         raise ValueError('The number of heads needs to be a divisor of the embedding dimension')
+    
+    match cfg['network']['unit']:
+
+        case 'half':
+            cfg['network']['unit'] = torch.half
+
+        case 'double':
+            cfg['network']['unit'] = torch.double
+
+        case _ :
+            cfg['network']['unit'] = torch.float
+
+    if 'separate_value_training' not in cfg.keys():
+        cfg['separate_value_training'] = False
 
 
     return cfg

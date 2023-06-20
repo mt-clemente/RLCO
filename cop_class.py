@@ -4,11 +4,12 @@ import torch
 
 class COPInstance():
 
-    def __init__(self,state,segments,size,**kwargs) -> None:
+    def __init__(self,state,segments,size,num_segments,**kwargs) -> None:
         self.state = state
         self.segments = segments
         self.kwargs = kwargs
         self.size = size
+        self.num_segments = num_segments
 
 class COPInstanceBatch():
     """
@@ -42,10 +43,6 @@ class COPInstanceBatch():
         except:
             pass
 
-
-    def __len__(self):
-        return len(self.states)
-
 class COProblem(ABC):
     """
     Abstract class to define Combinatorial Optimization problems.
@@ -60,8 +57,6 @@ class COProblem(ABC):
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        else:
-            self.device = device
 
         self.num_segments = None
         self.instance = None
@@ -101,7 +96,7 @@ class COProblem(ABC):
     
 
     @abstractmethod
-    def tokenize(self,instance:COPInstanceBatch) -> torch.Tensor:
+    def tokenize(self,states:torch.Tensor,segments:torch.Tensor) -> torch.Tensor:
         """
         This method takes in the instance of the problem and outputs tokens
         that can be processed by a transformer.
@@ -110,37 +105,33 @@ class COProblem(ABC):
         If you have a batch of states representing a 2D grid of shape [batch, h, w] you
         want to return a tensor of shape [batch, h*w, dim_embed]
 
+        FIXME: desc
         TODO: If the size of the embedding does not correspond to the dim of a pretrained model you want to use,
         it is possible to use a conv1d with the correct number of channels trained like an autoencoder to 
         adapt the size of embedddings
         """
-        
-        if isinstance(instance.states,torch.Tensor) and isinstance(instance.segments,torch.Tensor) \
-            and instance.states.size(-1) == self.dim_embedding and instance.segments.size(-1) == self.dim_embedding:
-
-            return instance
     
-        else:
-            raise NotImplementedError
+        raise NotImplementedError
 
 
 
     @abstractmethod
-    def valid_action_mask(self,instances:COPInstanceBatch) -> torch.BoolTensor:
+    def valid_action_mask(self,states:torch.Tensor,segments:torch.Tensor) -> torch.BoolTensor:
         """
         Outputs a mask that is True if an action is valid from the current state,
         and false if it is not.
         """
-
+        
+        return torch.ones_like(segments[0,:,0]) == 1
         raise NotImplementedError
 
-    def valid_action_mask_(self,instances:COPInstanceBatch,used_mask:torch.Tensor=None):
+    def valid_action_mask_(self,states:torch.Tensor,segments:torch.Tensor,used_mask:torch.Tensor=None):
 
         if self.reuse_segments:
-            return self.valid_action_mask(instances)
+            return self.valid_action_mask(states,segments)
 
         else:
-            return torch.logical_and(self.valid_action_mask(instances),used_mask)
+            return torch.logical_and(self.valid_action_mask(states,segments),used_mask)
 
 
 

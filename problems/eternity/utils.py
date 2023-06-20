@@ -3,8 +3,8 @@ from math import exp
 import torch
 from torch import Tensor
 from einops import rearrange
-from eternity import EternityPuzzle
-from param import *
+from .eternity import EternityPuzzle
+from .param import *
 
 
 # -------------------- UTILS --------------------
@@ -17,6 +17,14 @@ def parse_arguments():
     parser.add_argument('--hotstart', type=str, default=False)
 
     return parser.parse_args()
+
+def toseq(state:torch):
+
+    return rearrange(state[1:-1,1:-1],'h w d -> (h w) d')
+
+def fromseq(state:torch):
+
+    return rearrange(state[1:-1,1:-1],'(h w) d -> h w d',h=int(state.size(0)**0.5))
 
 
 def initialize_sol(pz:EternityPuzzle, device):

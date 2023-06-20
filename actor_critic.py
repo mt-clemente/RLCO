@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers import MaskedStableSoftmax, Pointer, PositionalEncoding, Transformer
-
+from layers import MaskedStableSoftmax, Pointer, PositionalEncoding, PositionalEncoding2D, Transformer
 
 class ActorCritic(nn.Module):
 
@@ -26,7 +25,7 @@ class ActorCritic(nn.Module):
             cfg=act_cfg,
             dim_embed=cfg['dim_embed'],
             num_segments=num_segments,
-            device=cfg['device'],
+            device=device,
             unit=cfg['unit']
         )
 
@@ -36,18 +35,18 @@ class ActorCritic(nn.Module):
         self.critic = Critic(
             cfg=crt_cfg,
             dim_embed=cfg['dim_embed'],
-            device=cfg['device'],
+            device=device,
             unit=cfg['unit']
         )
 
 
         self.dim_embed = cfg['dim_embed'] 
 
-        if 'categorical_token_vocab_size' in cfg.keys():
-            self.embed_state = nn.Embedding(cfg['categorical_token_vocab_size'],self.dim_embed)
-            self.embed_segment = nn.Embedding(cfg['categorical_token_vocab_size'],self.dim_embed)
+        if 'categorical_vocab_size' in cfg.keys():
+            self.embed_state = nn.Embedding(cfg['categorical_vocab_size'],self.dim_embed)
+            self.embed_segment = nn.Embedding(cfg['categorical_vocab_size'],self.dim_embed)
 
-        self.positional_encoding = PositionalEncoding(self.dim_embed)
+        self.positional_encoding = PositionalEncoding2D(cfg['dim_embed']) # FIXME: choose type
         self.embed_state_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
         self.embed_segment_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
 
@@ -60,16 +59,13 @@ class ActorCritic(nn.Module):
         else:
             self.optimizer = init_optimizer(self,opt_cfg=cfg['optimizer'])
 
-    def make_transformer_inputs(self,states,segments, timesteps):
+    def make_transformer_inputs(self,embedded_states,embedded_segments, timesteps):
 
         
-        batch_size = states.shape[0]
+        batch_size = embedded_states.shape[0]
 
-        embedded_segments = self.embed_segment(segments)
-        embedded_states = self.embed_state(states)
-
-
-        embedded_states += self.positional_encoding(embedded_states)
+        # FIXME: add positional encoding
+        # embedded_states += self.positional_encoding(embedded_states)
 
         src_inputs = self.embed_segment_ln(embedded_segments)
         tgt_inputs = self.embed_state_ln(embedded_states)
@@ -85,8 +81,8 @@ class ActorCritic(nn.Module):
         timesteps = timesteps.unsqueeze(-1)
 
         src_inputs, tgt_inputs,  tgt_key_padding_mask = self.make_transformer_inputs(
-            states=state_tokens,
-            segments=segment_tokens,
+            embedded_states=state_tokens,
+            embedded_segments=segment_tokens,
             timesteps=timesteps
         )
 
@@ -137,13 +133,14 @@ class Actor(nn.Module):
 
 
     def __init__(self, cfg, dim_embed, num_segments, device, unit) -> None:
+        super().__init__()
 
         self.num_segments = num_segments        
         self.ptrnet = cfg['pointer']
         self.dim_embed=dim_embed
 
         self.transformer =  Transformer(
-            d_model=dim_embed,
+            d_model=self.dim_embed,
             num_encoder_layers=cfg['n_encoder_layers'],
             num_decoder_layers=cfg['n_decoder_layers'],
             nhead=cfg['nhead'],
@@ -187,6 +184,18 @@ class Actor(nn.Module):
             tgt_mask = tgt_mask.bool()
 
         if self.ptrnet:
+
+            print(src_inputs.size())
+            print(tgt_inputs.size())
+            print(tgt_mask.size())
+            print(src_key_padding_mask.size())
+            print(tgt_key_padding_mask.size())
+            
+
+
+
+
+
             tgt_tokens, mem_tokens = self.transformer(
                 src=src_inputs,
                 tgt=tgt_inputs,
@@ -216,14 +225,14 @@ class Actor(nn.Module):
 class Critic(nn.Module):
 
     def __init__(self, cfg, dim_embed, device, unit) -> None:
-        
+        super().__init__()
 
         self.transformer =  nn.Transformer(
             d_model=dim_embed,
             num_encoder_layers=cfg['n_encoder_layers'],
             num_decoder_layers=cfg['n_decoder_layers'],
-            nhead=cfg['nhead'],
             dim_feedforward=cfg['hidden_size'],
+            nhead=cfg['nhead'],
             dropout=0,
             activation=F.gelu,
             batch_first=True,

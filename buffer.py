@@ -8,11 +8,12 @@ class Buffer():
     #TODO: custom state init, if some segments of the solution are known
     # CHECK WHICH ELEMNTS HAVE TO BE BUFFERED AND WHICH DO NOT ---> HORIZON VS SEQUENCE
 
-    def __init__(self,cfg,num_instances,max_ep_len,device='cpu',init_state=None) -> None:
-        self.unit = cfg['unit']
+    def __init__(self,cfg,num_instances,max_ep_len,dim_token,max_num_segments,device='cpu',init_state=None) -> None:
+        self.unit = cfg['network']['unit']
         self.capacity = cfg['training']['horizon']
         self.device = device
-        self.dim_token=cfg['dim_token']
+        self.dim_token=dim_token
+        self.max_num_segments = max_num_segments
         self.init_state = init_state
         self.max_ep_len = max_ep_len
         self.num_instances = num_instances
@@ -47,7 +48,7 @@ class Buffer():
         self.horzion_timesteps = torch.empty(self.num_instances,device=self.device,dtype=int)
         self.act_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.policy_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
-        self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_ep_len),dtype=bool,device=self.device)
+        self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_num_segments),dtype=bool,device=self.device)
         self.rew_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.final_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.timestep_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=int)

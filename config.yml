@@ -1,21 +1,23 @@
-unit: 'torch.half'
-cuda: True
+cuda: False
 log_every: 20
 # categorical_token_vocab_size: 23
 # dim_token: 4
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
-networks:
+network:
 
+  unit: 'torch.half'
   dim_embed: 20
-  pointer: true
+  separate_value_training: True
+  categorical_vocab_size: 23
 
   actor:  
+    pointer: true
     hidden_size: 512
     n_encoder_layers: 4
     n_decoder_layers: 4
-    nhead: 40
+    nhead: 5
     optimizer:
       lr: 1.0e-4
 
@@ -23,7 +25,7 @@ networks:
     hidden_size: 512
     n_encoder_layers: 4
     n_decoder_layers: 4
-    nhead: 40
+    nhead: 5
     optimizer:
       lr: 1.0e-4
 
@@ -32,7 +34,6 @@ networks:
 
 training:
 
-  separate_value_training: True
   gae_lambda: 0.9
   value_weight: 0.5
   policy_weight: 1
