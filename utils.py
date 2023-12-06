@@ -39,7 +39,6 @@ class TrainingManager():
         self.num_instances = len(instances)
         self.segment_size = self.instances[0].state.size(-1)
 
-
         # TODO: Init state mgt
         if isinstance(self.instances[0].state,torch.Tensor) and isinstance(self.instances[0].segments,torch.Tensor):
 
@@ -65,6 +64,7 @@ class TrainingManager():
 
         self.src_key_padding_masks = self.init_masks()
         self.masks = self.src_key_padding_masks.clone()
+        self.causal_mask = torch.triu(torch.ones(self.max_inst_size, self.max_inst_size,device=self.device), diagonal=1)
 
         self.reset()
 
@@ -100,8 +100,7 @@ class TrainingManager():
 
         return (
             self.states,
-            self.segments,
-            self.get_ep_step(),
+            self.segments
         )
     
 
@@ -109,12 +108,11 @@ class TrainingManager():
     def step(self,actions):
 
         self.curr_step += 1
-        self.masks[actions] = False
-
+        self.masks[torch.arange(self.masks.size(0)),actions] = False
         # New episode
-        finals = self.curr_step == self.instance_lengths
-        self.states[finals] = self.init_states
-        self.masks[finals] = self.src_key_padding_masks
+        finals = (self.curr_step % self.instance_lengths) == 0
+        self.states[finals] = self.init_states[finals]
+        self.masks[finals] = self.src_key_padding_masks[finals]
 
         # FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:
         if self.curr_step >= self.max_inst_size: #FIXME: +- 1?
@@ -128,17 +126,10 @@ class TrainingManager():
     def init_masks(self):
         
         # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) > self.instance_num_segments.unsqueeze(-1)
+        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) >= self.instance_num_segments.unsqueeze(-1)
         
         return src_key_padding_mask
     
-    def causal_mask(self):
-
-        ep_steps = self.curr_step % self.instance_lengths
-        causal_mask = torch.arange(self.num_instances,device=self.device).expand((self.num_instances,-1)) > ep_steps.unsqueeze_(-1)
-
-        return causal_mask
-
     def get_tokens_batch(self):
         """
         Returns a matrix containing the tokens of all the instances in the batch
@@ -191,8 +182,10 @@ def load_config(path:Path):
         case _ :
             cfg['network']['unit'] = torch.float
 
-    if 'separate_value_training' not in cfg.keys():
-        cfg['separate_value_training'] = False
-
+    if 'separate_value_training' not in cfg['network'].keys():
+        cfg['network']['separate_value_training'] = False
+        cfg['training']['separate_value_training'] = False
+    else:
+        cfg['training']['separate_value_training'] = cfg['network']['separate_value_training']
 
     return cfg

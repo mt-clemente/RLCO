@@ -8,7 +8,22 @@ class Transformer(nn.Module):
 
     #TODO: Cache encoder output
 
-    def __init__(self, d_model,num_encoder_layers,num_decoder_layers,dim_feedforward,nhead,activation,device,batch_first,norm_first,dtype=torch.float,return_mem=True,dropout=0) -> None:
+    def __init__(
+            self,
+            d_model,
+            num_encoder_layers,
+            num_decoder_layers,
+            dim_feedforward,
+            nhead,
+            activation,
+            device,
+            batch_first,
+            norm_first,
+            dtype=torch.float,
+            return_mem=True,
+            dropout=0
+            ) -> None:
+
         super().__init__()
 
         self.transformer = nn.Transformer(
@@ -34,12 +49,18 @@ class Transformer(nn.Module):
         memory = self.transformer.encoder(src,src_key_padding_mask=src_key_padding_mask)
 
         if tgt_key_padding_mask is None:
-            output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask)
+            output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask*(-1e6), memory_key_padding_mask=src_key_padding_mask)
         else:
-            output = self.transformer.decoder(tgt,memory,tgt_mask=tgt_mask.half()*(-1e6), memory_key_padding_mask=src_key_padding_mask,tgt_key_padding_mask=tgt_key_padding_mask.half()*-1e6)
+            output = self.transformer.decoder(
+                tgt,
+                memory,
+                tgt_mask=tgt_mask*(-1e6),
+                memory_key_padding_mask=src_key_padding_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask*-1e6
+                )
 
         if self.return_mem:
-            return output, memory
+            return output,memory
         
         return output
     
@@ -125,7 +146,7 @@ class Pointer(nn.Module):
 
 
 class MaskedStableSoftmax(nn.Module):
-    def __init__(self, eps = 1e5) -> None:
+    def __init__(self, eps = 1e8) -> None:
         super().__init__()
         self.eps = eps
 

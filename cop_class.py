@@ -123,7 +123,6 @@ class COProblem(ABC):
         """
         
         return torch.ones_like(segments[0,:,0]) == 1
-        raise NotImplementedError
 
     def valid_action_mask_(self,states:torch.Tensor,segments:torch.Tensor,used_mask:torch.Tensor=None):
 
@@ -131,7 +130,7 @@ class COProblem(ABC):
             return self.valid_action_mask(states,segments)
 
         else:
-            return torch.logical_and(self.valid_action_mask(states,segments),used_mask)
+            return torch.logical_not(torch.logical_and(self.valid_action_mask(states,segments),used_mask))
 
 
 

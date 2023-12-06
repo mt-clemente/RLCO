@@ -18,13 +18,14 @@ def parse_arguments():
 
     return parser.parse_args()
 
-def toseq(state:torch):
+def toseq(state:torch.Tensor,remove_padding=True):
+    if remove_padding:
+        return rearrange(state[1:-1,1:-1],'h w d -> (h w) d')
+    
+    return rearrange(state,'h w d -> (h w) d')
 
-    return rearrange(state[1:-1,1:-1],'h w d -> (h w) d')
-
-def fromseq(state:torch):
-
-    return rearrange(state[1:-1,1:-1],'(h w) d -> h w d',h=int(state.size(0)**0.5))
+def fromseq(state:torch.Tensor):
+    return rearrange(state,'(h w) d -> h w d',h=int(state.size(0)**0.5))
 
 
 def initialize_sol(pz:EternityPuzzle, device):

@@ -55,6 +55,7 @@ class RLCOSolver():
             cfg=self.cfg,
             buf=buf,
             max_instance_size=self.manager.max_inst_size,
+            max_num_segments=self.manager.max_num_segments,
             eval_model_dir=eval_model_dir,
             pb=pb,
             device=device,

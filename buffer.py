@@ -17,6 +17,7 @@ class Buffer():
         self.init_state = init_state
         self.max_ep_len = max_ep_len
         self.num_instances = num_instances
+        self.reset()
 
     def push(
             self,
@@ -29,23 +30,28 @@ class Buffer():
             final
             ):
 
-        self.state_buf[self.ptr+1] = state
-        self.policy_buf[self.ptr] = policy
-        self.mask_buf[self.ptr] = mask
-        self.rew_buf[self.ptr] = reward
-        self.timestep_buf[self.ptr] = ep_step
-        self.final_buf[self.ptr] = final
-        self.act_buf[self.ptr] = action
-
+        if self.ptr == self.capacity-1:
+            self.horzion_states = state
+        else:
+            self.state_buf[:,self.ptr+1] = state
+        self.policy_buf[:,self.ptr] = policy
+        self.mask_buf[:,self.ptr] = mask
+        self.rew_buf[:,self.ptr] = reward
+        self.timestep_buf[:,self.ptr] = ep_step
+        self.final_buf[:,self.ptr] = final
+        self.act_buf[:,self.ptr] = action
+        print(self.ptr)
         self.ptr += 1
 
     def reset(self):
+        
         self.state_buf = torch.zeros((self.num_instances,self.capacity,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
         if not self.init_state is None:
             self.state_buf[0] = self.init_state
         
-        self.horzion_states = torch.empty((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
+        self.value_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.horzion_timesteps = torch.empty(self.num_instances,device=self.device,dtype=int)
+        self.horzion_states = torch.empty((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
         self.act_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.policy_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_num_segments),dtype=bool,device=self.device)

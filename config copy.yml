@@ -18,15 +18,16 @@ network:
     n_encoder_layers: 4
     n_decoder_layers: 4
     nhead: 5
+    optimizer:
+      lr: 1.0e-4
 
   critic:  
     hidden_size: 512
     n_encoder_layers: 4
     n_decoder_layers: 4
     nhead: 5
-
-  optimizer:
-    lr: 1.0e-4
+    optimizer:
+      lr: 1.0e-4
   
   value_weight: 0.5
   policy_weight: 1

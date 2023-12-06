@@ -59,6 +59,7 @@ class ActorCritic(nn.Module):
         else:
             self.optimizer = init_optimizer(self,opt_cfg=cfg['optimizer'])
 
+
     def make_transformer_inputs(self,embedded_states,embedded_segments, timesteps):
 
         
@@ -69,18 +70,16 @@ class ActorCritic(nn.Module):
 
         src_inputs = self.embed_segment_ln(embedded_segments)
         tgt_inputs = self.embed_state_ln(embedded_states)
-
         tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps
 
-        return src_inputs, tgt_inputs,  tgt_key_padding_mask
+        return src_inputs, tgt_inputs, tgt_key_padding_mask
 
 
 
-    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks):
+    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks,tgt_mask):
 
         timesteps = timesteps.unsqueeze(-1)
-
-        src_inputs, tgt_inputs,  tgt_key_padding_mask = self.make_transformer_inputs(
+        src_inputs, tgt_inputs, tgt_key_padding_mask = self.make_transformer_inputs( #FIXME: homogeneous output size 
             embedded_states=state_tokens,
             embedded_segments=segment_tokens,
             timesteps=timesteps
@@ -92,6 +91,7 @@ class ActorCritic(nn.Module):
                 timesteps=timesteps,
                 valid_action_mask=valid_action_mask,
                 src_key_padding_mask=src_key_padding_masks,
+                tgt_mask=tgt_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask
         )
 
@@ -185,17 +185,6 @@ class Actor(nn.Module):
 
         if self.ptrnet:
 
-            print(src_inputs.size())
-            print(tgt_inputs.size())
-            print(tgt_mask.size())
-            print(src_key_padding_mask.size())
-            print(tgt_key_padding_mask.size())
-            
-
-
-
-
-
             tgt_tokens, mem_tokens = self.transformer(
                 src=src_inputs,
                 tgt=tgt_inputs,
@@ -204,7 +193,7 @@ class Actor(nn.Module):
                 tgt_key_padding_mask=tgt_key_padding_mask
             )
 
-            tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps].reshape(batch_size,self.dim_embed)
+            tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze(-1)].reshape(batch_size,self.dim_embed)
             mem_tokens = mem_tokens.reshape(batch_size,self.num_segments,self.dim_embed)
             policy_pred = self.policy_attn_head(mem_tokens,tgt_tokens,torch.logical_not(valid_action_mask))
         
@@ -247,6 +236,8 @@ class Critic(nn.Module):
             nn.Linear(dim_embed, 1,device=device,dtype=unit),
         )
 
+        self.dim_embed = dim_embed
+
 
 
     def forward(self,src_inputs,tgt_inputs,timesteps,tgt_mask=None,src_key_padding_mask=None,tgt_key_padding_mask=None):
@@ -266,7 +257,7 @@ class Critic(nn.Module):
             tgt_key_padding_mask=tgt_key_padding_mask
         )
 
-        value_pred = self.critic_head(tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps+1].reshape(batch_size,self.dim_embed))
+        value_pred = self.critic_head(tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed))
 
         return value_pred
 

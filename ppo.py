@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from torch.utils.data import TensorDataset,DataLoader
+from torchviz import make_dot
 
 from actor_critic import ActorCritic
 from buffer import Buffer
@@ -15,11 +16,6 @@ from cop_class import COProblem
 from utils import TrainingManager, load_config
 
 DEBUG = False
-
-
-
-
-
 
 
 
@@ -32,7 +28,9 @@ class PPOAgent(nn.Module):
 
     def __init__(self,
                  cfg:dict,
-                 max_instance_size,pb:COProblem,
+                 max_instance_size,
+                 pb:COProblem,
+                 max_num_segments,
                  buf:Buffer,
                  init_state = None,
                  eval_model_dir = None,
@@ -44,6 +42,9 @@ class PPOAgent(nn.Module):
         self.train_cfg:dict = cfg['training']
         self.pb = pb
         self.buf = buf
+        self.value_weight = cfg['network']['value_weight']
+        self.policy_weight = cfg['network']['policy_weight']
+        self.entropy_weight = cfg['network']['entropy_weight']
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
@@ -58,7 +59,7 @@ class PPOAgent(nn.Module):
 
         self.model = ActorCritic(
             cfg=cfg['network'],
-            num_segments=max_instance_size,
+            num_segments=max_num_segments,
             init_state=init_state,
             device=self.device
         )
@@ -70,7 +71,15 @@ class PPOAgent(nn.Module):
         raise NotImplementedError
 
 
-    def get_policy(self, states, segments, timesteps, valid_action_mask,src_key_padding_masks):
+    def get_policy(
+            self,
+            states,
+            segments,
+            timesteps,
+            valid_action_mask,
+            src_key_padding_masks,
+            tgt_mask,
+            ):
 
         state_tokens, segment_tokens = self.pb.tokenize(states,segments)
 
@@ -79,7 +88,8 @@ class PPOAgent(nn.Module):
             segment_tokens=segment_tokens,
             timesteps=timesteps,
             valid_action_mask=valid_action_mask,
-            src_key_padding_masks=src_key_padding_masks
+            src_key_padding_masks=src_key_padding_masks,
+            tgt_mask=tgt_mask,
         )
 
         return policy
@@ -90,19 +100,20 @@ class PPOAgent(nn.Module):
         #     raise BufferError("Calculating GAE at wrong time")
         #     pass
 
+        # FIXME: Timesteps
+
         # State dims are [instance,step,state,token]
-        states = torch.cat((buf.state_buf,buf.horzion_states),dim=1)
-        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps))
+        states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
+        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1)),dim=1).transpose(0,1).unsqueeze(-1)
         rewards = buf.rew_buf
         finals = buf.final_buf
-
-        values = torch.tensor((states.size(0),states.size(1)+1))
-
+        values = torch.empty((states.size(1),states.size(0)))
         for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
-
+            
+            embedded_state_step,embedded_segment_step = self.pb.tokenize(state_step,segments)
             src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
-                states=state_step,
-                segments=segments,
+                embedded_states=embedded_state_step,
+                embedded_segments=embedded_segment_step,
                 timesteps=timestep_step
             )
 
@@ -114,17 +125,15 @@ class PPOAgent(nn.Module):
                 src_key_padding_mask=src_key_padding_masks
             )
 
-            values[i] = value_step
+            values[:,i] = value_step.squeeze()
 
-
-        next_values = values[:,1:]
+        next_values = values[:,1:].detach()
         values = values[:,:-1]
-
+        buf.value_buf[:,:] = values
 
         # FIXME: Check if there is a problem with the new shapes
 
-
-        td_errors = rewards + gamma * next_values * (1 - finals) - values
+        td_errors = rewards + gamma * next_values * (1 - finals) - values.detach()
         gae = 0
         advantages = torch.zeros_like(td_errors)
 
@@ -149,15 +158,14 @@ class PPOAgent(nn.Module):
 
         (
             states,
-            segments,
-            steps
+            segments
 
         ) = manager.get_training_state()
 
 
-        for _ in range(manager.horizon):
+        for _ in range(manager.horizon):#FIXME: -1
             
-            
+            steps = manager.get_ep_step()
             action_masks = self.pb.valid_action_mask_(states,segments,manager.masks)
 
             policy = self.get_policy(
@@ -166,15 +174,16 @@ class PPOAgent(nn.Module):
                 timesteps=steps,
                 valid_action_mask=action_masks,
                 src_key_padding_masks=manager.src_key_padding_masks,
+                tgt_mask=manager.causal_mask
             )
 
             new_states, rewards, probs, actions = self.increment_states(
                 states=states,
                 segments=segments,
                 policies=policy,
-                steps=steps
+                steps=steps,
+                
             )
-
 
             self.buf.push(
                 state=states,
@@ -190,10 +199,8 @@ class PPOAgent(nn.Module):
 
             # update finals / masks based on actions taken
             manager.step(actions)
-
         # inject the states at the end of the horizon, needed to calculate advantages
         manager.finalize_rollout(states)
-        self.buf.horzion_states = states
         self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
 
         
@@ -207,11 +214,16 @@ class PPOAgent(nn.Module):
         types
         """
 
-        actions = torch.multinomial(policies,1)
-        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
-        new_states, rewards = self.pb.act(states,added_tokens,steps)
+        actions = torch.multinomial(policies,1).squeeze()
 
-        return new_states, rewards, policies[actions], actions
+        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
+
+        # FIXME: Remove that
+        if 0 in added_tokens.sum(-1).squeeze():
+            raise ValueError("Null token chosen: in the following segments : ",added_tokens)
+        
+        new_states, rewards = self.pb.act(states,added_tokens,steps)
+        return new_states, rewards, policies[torch.arange(policies.size(0)),actions], actions
 
 
     def update(self,manager:TrainingManager):
@@ -238,12 +250,13 @@ class PPOAgent(nn.Module):
         dataset = TensorDataset(
             rearrange(self.buf.state_buf,'i s p t -> (i s) p t'),
             rearrange(self.buf.act_buf,'i s -> (i s)'),
+            rearrange(self.buf.value_buf,'i s -> (i s)'),
             rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
-            rearrange(self.buf.policy_buf,'i s m -> (i s) m'),
+            rearrange(self.buf.policy_buf,'i s -> (i s)'),
             rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
-            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.state_buf.size(1))
+            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
         )
 
 
@@ -256,6 +269,7 @@ class PPOAgent(nn.Module):
                 (
                     batch_states,
                     batch_actions,
+                    batch_values,
                     batch_masks,
                     batch_old_policies,
                     batch_timesteps,
@@ -266,14 +280,16 @@ class PPOAgent(nn.Module):
                 ) = batch
 
                 # FIXME: self. wtf??
+             
+                embedded_states, embedded_segments = manager.pb.tokenize(batch_states,manager.segments[instance_ids])
 
                 src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
-                    batch_states,
-                    manager.segments[instance_ids],
-                    batch_timesteps,
+                    embedded_states,
+                    embedded_segments,
+                    batch_timesteps.unsqueeze(-1),
                 )
                 
-                batch_policy, batch_value = self.model.actor.forward(
+                batch_policy = self.model.actor.forward(
                     src_inputs=src_inputs,
                     tgt_inputs=tgt_inputs,
                     timesteps=batch_timesteps,
@@ -283,30 +299,27 @@ class PPOAgent(nn.Module):
 
                 )
 
+                print(batch_states.size())
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
-                old_action_probs = batch_old_policies.gather(1, batch_actions.unsqueeze(1))
-                ratio = action_probs / (old_action_probs + 1e-5)
+                ratio = action_probs / (batch_old_policies + 1e-5)
                 clipped_ratio = torch.clamp(ratio, 1 - self.train_cfg['clip_eps'], 1 + self.train_cfg['clip_eps'])
                 surrogate1 = ratio * batch_advantages.unsqueeze(1)
                 surrogate2 = clipped_ratio * batch_advantages.unsqueeze(1)
-                policy_loss = -torch.min(surrogate1, surrogate2).mean()
+                policy_loss = -torch.min(surrogate1, surrogate2).mean() * self.policy_weight
                 # Calculate value function loss
-                value_loss = F.mse_loss(batch_value.squeeze(-1), batch_returns) * self.value_weight
-
+                value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns_norm) * self.value_weight
                 # Calculate entropy bonus
                 entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(dim=-1).mean()
-                entropy_loss = -self.train_cfg['entropy_weight'] * entropy
+                entropy_loss = -self.entropy_weight * entropy
                 # Compute total loss and update parameters
 
 
 
-                
                 if self.train_cfg['separate_value_training']:
-
                     pol_loss = policy_loss + entropy_loss
                     val_loss = value_loss
 
@@ -324,7 +337,8 @@ class PPOAgent(nn.Module):
 
                 else:
                     
-                    loss = policy_loss + value_loss + entropy_loss
+                    print("---------->BATCH")
+                    loss = policy_loss + value_loss + entropy_loss.detach()
                     self.model.optimizer.zero_grad()
                     loss.backward()
                   
@@ -358,7 +372,7 @@ class PPOAgent(nn.Module):
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
-            "Value repartition":batch_value.squeeze(-1).detach(),
+            "Value repartition":batch_values.squeeze(-1).detach(),
             "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })
 
