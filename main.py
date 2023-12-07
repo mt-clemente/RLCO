@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+import wandb
 from solver import RLCOSolver
 import argparse
 from problems.eternity_cop import Eternity
@@ -31,7 +32,7 @@ TODO:
 
 """
 torch.cuda.is_available = lambda : False
-
+torch.autograd.set_detect_anomaly(True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')
@@ -41,10 +42,20 @@ args = parser.parse_args()
 
 problem = Eternity
 
+
 trainer = RLCOSolver(
     config_path=args.cfg,
     instances_path=Path(args.files),
     problem=Eternity,
 )
 
+wandb.init(
+    project='EteRLnity',
+    entity='mateo-clemente',
+    group='NewTests',
+    config=trainer.cfg
+)
+
 trainer.train()
+
+wandb.finish()

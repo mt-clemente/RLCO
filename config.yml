@@ -13,16 +13,16 @@ network:
   categorical_vocab_size: 23
 
   actor:  
-    pointer: true
+    pointer: False
     hidden_size: 512
-    n_encoder_layers: 4
-    n_decoder_layers: 4
+    n_encoder_layers: 1
+    n_decoder_layers: 1
     nhead: 5
 
   critic:  
     hidden_size: 512
-    n_encoder_layers: 4
-    n_decoder_layers: 4
+    n_encoder_layers: 1
+    n_decoder_layers: 1
     nhead: 5
 
   optimizer:

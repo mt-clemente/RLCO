@@ -133,7 +133,8 @@ class COProblem(ABC):
             return torch.logical_not(torch.logical_and(self.valid_action_mask(states,segments),used_mask))
 
 
-
+    def display_solution(self,solution,file):
+        raise NotImplementedError
 
 
 # class InstanceBatchManager():

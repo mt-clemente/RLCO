@@ -72,9 +72,9 @@ class RLCOSolver():
                 self.agent.rollout(self.manager)
                 self.agent.update(self.manager)
                 
-                if self.manager.episode % self.cfg['checkpoint_period']:
+                # if self.manager.episode % self.cfg['checkpoint_period']:
                     #TODO: Save models
-                    pass
+                    
         
         except KeyboardInterrupt:
             pass

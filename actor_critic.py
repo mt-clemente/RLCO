@@ -205,7 +205,7 @@ class Actor(nn.Module):
                 tgt_key_padding_mask=tgt_key_padding_mask
             )
 
-            policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps].reshape(batch_size,self.dim_embed))
+            policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps.squeeze()].reshape(batch_size,self.dim_embed))
             policy_pred = self.policy_head(policy_logits,valid_action_mask)
 
         return policy_pred
@@ -257,7 +257,8 @@ class Critic(nn.Module):
             tgt_key_padding_mask=tgt_key_padding_mask
         )
 
-        value_pred = self.critic_head(tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed))
+        tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed)
+        value_pred = self.critic_head(tgt_tokens)
 
         return value_pred
 

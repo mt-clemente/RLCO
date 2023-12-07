@@ -40,7 +40,6 @@ class Buffer():
         self.timestep_buf[:,self.ptr] = ep_step
         self.final_buf[:,self.ptr] = final
         self.act_buf[:,self.ptr] = action
-        print(self.ptr)
         self.ptr += 1
 
     def reset(self):

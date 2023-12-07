@@ -8,7 +8,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from torch.utils.data import TensorDataset,DataLoader
-from torchviz import make_dot
 
 from actor_critic import ActorCritic
 from buffer import Buffer
@@ -101,13 +100,13 @@ class PPOAgent(nn.Module):
         #     pass
 
         # FIXME: Timesteps
-
         # State dims are [instance,step,state,token]
         states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
         timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1)),dim=1).transpose(0,1).unsqueeze(-1)
         rewards = buf.rew_buf
         finals = buf.final_buf
-        values = torch.empty((states.size(1),states.size(0)))
+
+        value_steps = []
         for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
             
             embedded_state_step,embedded_segment_step = self.pb.tokenize(state_step,segments)
@@ -125,11 +124,12 @@ class PPOAgent(nn.Module):
                 src_key_padding_mask=src_key_padding_masks
             )
 
-            values[:,i] = value_step.squeeze()
+            value_steps.append(value_step.squeeze())
 
+        values = torch.stack(value_steps, dim=1)
         next_values = values[:,1:].detach()
         values = values[:,:-1]
-        buf.value_buf[:,:] = values
+
 
         # FIXME: Check if there is a problem with the new shapes
 
@@ -152,7 +152,7 @@ class PPOAgent(nn.Module):
         advantages = advantages
         returns_to_go = returns_to_go
 
-        return advantages, returns_to_go
+        return advantages, returns_to_go,values
 
     def rollout(self,manager:TrainingManager):
 
@@ -168,22 +168,26 @@ class PPOAgent(nn.Module):
             steps = manager.get_ep_step()
             action_masks = self.pb.valid_action_mask_(states,segments,manager.masks)
 
-            policy = self.get_policy(
-                states=states,
-                segments=segments,
-                timesteps=steps,
-                valid_action_mask=action_masks,
-                src_key_padding_masks=manager.src_key_padding_masks,
-                tgt_mask=manager.causal_mask
-            )
+            with torch.no_grad():
+                policy = self.get_policy(
+                    states=states,
+                    segments=segments,
+                    timesteps=steps,
+                    valid_action_mask=action_masks,
+                    src_key_padding_masks=manager.src_key_padding_masks,
+                    tgt_mask=manager.causal_mask
+                )
 
             new_states, rewards, probs, actions = self.increment_states(
                 states=states,
                 segments=segments,
                 policies=policy,
                 steps=steps,
+                sizes=manager.sizes,
                 
             )
+
+            finals = manager.get_finals()
 
             self.buf.push(
                 state=states,
@@ -192,19 +196,22 @@ class PPOAgent(nn.Module):
                 mask=action_masks,
                 reward=rewards,
                 ep_step=steps,
-                final=manager.get_finals()
+                final=finals
             )
         
             states = new_states
-
+            states[finals,:,:] = manager.init_states[finals,:,:]
             # update finals / masks based on actions taken
             manager.step(actions)
+
         # inject the states at the end of the horizon, needed to calculate advantages
         manager.finalize_rollout(states)
+
+        self.pb.display_solution(states[0],'temp.png',manager.sizes[0])
         self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
 
         
-    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps):
+    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps,sizes):
         """
         Adds the tokens selected by the policies to the current states.
         Returns new states, associated rewards, probabilities for each action w.r.t the current
@@ -214,15 +221,15 @@ class PPOAgent(nn.Module):
         types
         """
 
+        self.pb.display_solution(states[0],'tempm1.png',sizes[0])
         actions = torch.multinomial(policies,1).squeeze()
-
         added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
-
         # FIXME: Remove that
         if 0 in added_tokens.sum(-1).squeeze():
-            raise ValueError("Null token chosen: in the following segments : ",added_tokens)
+            raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,sizes)
         
-        new_states, rewards = self.pb.act(states,added_tokens,steps)
+        new_states, rewards = self.pb.act(states,added_tokens,steps,sizes)
+        print(added_tokens[0])
         return new_states, rewards, policies[torch.arange(policies.size(0)),actions], actions
 
 
@@ -239,7 +246,7 @@ class PPOAgent(nn.Module):
 
         t0 = datetime.now()
 
-        advantages, returns = self.compute_gae_rtg(
+        advantages, returns,values = self.compute_gae_rtg(
             buf=self.buf,
             gamma=self.train_cfg['gamma'],
             gae_lambda=self.train_cfg['gae_lambda'],
@@ -250,7 +257,7 @@ class PPOAgent(nn.Module):
         dataset = TensorDataset(
             rearrange(self.buf.state_buf,'i s p t -> (i s) p t'),
             rearrange(self.buf.act_buf,'i s -> (i s)'),
-            rearrange(self.buf.value_buf,'i s -> (i s)'),
+            rearrange(values,'i s -> (i s)'),
             rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
             rearrange(self.buf.policy_buf,'i s -> (i s)'),
             rearrange(self.buf.timestep_buf,'i s -> (i s)'),
@@ -259,6 +266,18 @@ class PPOAgent(nn.Module):
             torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
         )
 
+
+        # dataset = TensorDataset(
+        #     self.buf.state_buf[0],
+        #     self.buf.act_buf[0],
+        #     values[0],
+        #     self.buf.mask_buf[0],
+        #     self.buf.policy_buf[0],
+        #     self.buf.timestep_buf[0],
+        #     advantages[0],
+        #     returns[0],
+        #     torch.arange(1,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
+        # )
 
         loader = DataLoader(dataset, batch_size=self.train_cfg['minibatch_size'], shuffle=True, drop_last=False)
 
@@ -288,6 +307,14 @@ class PPOAgent(nn.Module):
                     embedded_segments,
                     batch_timesteps.unsqueeze(-1),
                 )
+
+                batch_values = self.model.critic(
+                    src_inputs=src_inputs,
+                    tgt_inputs=tgt_inputs,
+                    timesteps=batch_timesteps,
+                    tgt_key_padding_mask=tgt_key_padding_mask,
+                    src_key_padding_mask=manager.src_key_padding_masks[instance_ids]
+                )
                 
                 batch_policy = self.model.actor.forward(
                     src_inputs=src_inputs,
@@ -299,7 +326,6 @@ class PPOAgent(nn.Module):
 
                 )
 
-                print(batch_states.size())
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
                 batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
 
@@ -316,8 +342,6 @@ class PPOAgent(nn.Module):
                 entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(dim=-1).mean()
                 entropy_loss = -self.entropy_weight * entropy
                 # Compute total loss and update parameters
-
-
 
                 if self.train_cfg['separate_value_training']:
                     pol_loss = policy_loss + entropy_loss
@@ -337,11 +361,10 @@ class PPOAgent(nn.Module):
 
                 else:
                     
-                    print("---------->BATCH")
-                    loss = policy_loss + value_loss + entropy_loss.detach()
+                    loss = policy_loss + value_loss + entropy_loss
                     self.model.optimizer.zero_grad()
                     loss.backward()
-                  
+
                     if self.grad_clip:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.grad_clip)
                   
@@ -368,14 +391,16 @@ class PPOAgent(nn.Module):
 
         print(datetime.now()-t0)
         wandb.log({
-            "Current learning rate":self.scheduler.get_last_lr()[0],
+            # "Current learning rate":self.scheduler.get_last_lr()[0],
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
             "Value repartition":batch_values.squeeze(-1).detach(),
-            "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
+            # "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })
 
+
+        self.buf.reset()
 
         # for worker in self.workers:
         #     worker.load_state_dict(self.model.state_dict())

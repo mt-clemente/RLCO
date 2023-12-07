@@ -24,29 +24,31 @@ class Eternity(COProblem):
             device=device
             )
         
-        
+    
 
     def load_instance(self, path: Path) -> COPInstance:
         pz = EternityPuzzle(path)
         state, tiles, _, n_tiles = initialize_sol(pz,self.device)
         self.num_segments = n_tiles
+        self.pz = pz
         return COPInstance(toseq(state).int(),tiles.int(),size = n_tiles,num_segments=n_tiles-1)
     
 
     # TODO: Fix kwargs
-    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:torch.IntTensor, **kwargs) -> tuple:
+    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:torch.IntTensor,sizes, **kwargs) -> tuple:
 
         rewards = torch.zeros(len(states),device=states.device)
         new_states = torch.empty_like(states)
 
         # TODO FIX SIZE
-        for i, (state, segment, step) in enumerate(zip(
+        for i, (state, segment, step,size) in enumerate(zip(
             states,
             segments,
-            steps
+            steps,
+            sizes
             )):
 
-            n_state, reward = self.place_tile(state,segment,step)
+            n_state, reward = self.place_tile(state,segment,step,size)
 
             new_states[i] = n_state
             rewards[i] = reward
@@ -72,7 +74,7 @@ class Eternity(COProblem):
 
 
 
-    def place_tile(self,state:torch.Tensor,tile:torch.Tensor,ep_step:int,step_offset:int=0):
+    def place_tile(self,state:torch.Tensor,tile:torch.Tensor,ep_step:int,size,step_offset:int=1):
         """
         If you start with a prefilled board with k pieces, you need to place tiles at spot
         k + 1, hence the need for a step offset.
@@ -86,19 +88,18 @@ class Eternity(COProblem):
         best_connect = -1
         best_state = None
         best_reward = None
-        state_ = fromseq(state)
-        size = state.size(0)
+        max_size = state.size(0)
+        state_ = fromseq(state,size)
+        side_size = int(size**0.5)
         for _ in range(4):
             tile = tile.roll(self.color_embedding_size,-1)
-            state_[step // size + 1, step % size + 1,:] = tile
-            conflicts, connect, reward = self.filling_connections(state_,size,step)
-
+            state_[step // side_size+1, step % side_size+1,:] = tile
+            conflicts, connect, reward = self.filling_connections(state_,side_size,step)
             if connect > best_connect:
-                best_state=toseq(state_,remove_padding=False)
+                best_state=toseq(state_,max_size,remove_borders=True)
                 best_connect = connect
                 best_conflict = conflicts
                 best_reward = reward
-
 
         return best_state, best_conflict
 
@@ -111,11 +112,10 @@ class Eternity(COProblem):
         i = step // bsize + 1
         j = step % bsize + 1
         state = torch.nn.functional.pad(state,(0,0,1,1,1,1),"constant",0)
-        west_tile_color = state[i,j-1,3*self.color_embedding_size:4*self.color_embedding_size]
-        south_tile_color = state[i-1,j,:self.color_embedding_size]
-
-        west_border_color = state[i,j,1*self.color_embedding_size:2*self.color_embedding_size]
-        south_border_color = state[i,j,2*self.color_embedding_size:3*self.color_embedding_size]
+        west_tile_color = state[i,j-1,3:4]
+        south_tile_color = state[i-1,j,:1]
+        west_border_color = state[i,j,1:2]
+        south_border_color = state[i,j,2:3]
 
         sides = 0
         connections = 0
@@ -161,3 +161,8 @@ class Eternity(COProblem):
         
         return sides - connections, connections, reward
 
+
+
+    def display_solution(self,state,file,size):
+        self.pz.board_size=int(size**0.5)
+        self.pz.display_solution(state.tolist(),file)

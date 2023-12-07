@@ -109,6 +109,8 @@ class TrainingManager():
 
         self.curr_step += 1
         self.masks[torch.arange(self.masks.size(0)),actions] = False
+        print(actions,self.masks)
+        print('*********')
         # New episode
         finals = (self.curr_step % self.instance_lengths) == 0
         self.states[finals] = self.init_states[finals]
@@ -126,7 +128,7 @@ class TrainingManager():
     def init_masks(self):
         
         # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) >= self.instance_num_segments.unsqueeze(-1)
+        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) < self.instance_num_segments.unsqueeze(-1)
         
         return src_key_padding_mask
     
@@ -149,7 +151,7 @@ class TrainingManager():
         return self.curr_step % self.instance_lengths
 
     def get_finals(self):
-        return self.curr_step % self.instance_lengths == 0
+        return (self.curr_step+1) % self.instance_lengths == 0
 
     def batch_attributes(self):
         return (

@@ -18,14 +18,23 @@ def parse_arguments():
 
     return parser.parse_args()
 
-def toseq(state:torch.Tensor,remove_padding=True):
-    if remove_padding:
-        return rearrange(state[1:-1,1:-1],'h w d -> (h w) d')
-    
-    return rearrange(state,'h w d -> (h w) d')
+def toseq(state:torch.Tensor,size=None,remove_borders=True):
+    if remove_borders:
+        ret = rearrange(state[1:-1,1:-1],'h w d -> (h w) d')
 
-def fromseq(state:torch.Tensor):
-    return rearrange(state,'(h w) d -> h w d',h=int(state.size(0)**0.5))
+    else:
+        ret = rearrange(state,'h w d -> (h w) d')
+        
+    if size is None:
+        return ret
+    
+    return torch.nn.functional.pad(ret,(0,0,0,size-len(ret)),'constant',0)
+
+def fromseq(state:torch.Tensor,size,pad=True):
+    ret = rearrange(state[:size],'(h w) d -> h w d',h=int(size**0.5))
+    if pad:
+        return torch.nn.functional.pad(ret,(0,0,1,1,1,1),'constant',0)
+    return ret
 
 
 def initialize_sol(pz:EternityPuzzle, device):
