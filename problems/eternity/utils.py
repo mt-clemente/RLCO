@@ -41,6 +41,9 @@ def initialize_sol(pz:EternityPuzzle, device):
     """
     Initializes the solution. The first corner is already play to remove symmetries.
     """
+    # To be able to rotate tiles easily, it is better to have either NESW or NWSE
+    orientation = [0,2,1,3]
+
 
     n_tiles = len(pz.piece_list)
     tiles = rearrange(to_tensor(pz.piece_list),'h w d -> (h w) d').to(device)
@@ -53,7 +56,6 @@ def initialize_sol(pz:EternityPuzzle, device):
     state, _, _, _ = place_tile(state,first_corner,0)
 
     tiles = tiles[torch.arange(tiles.size()[0],device=tiles.device) != first_corner_idx]
-
     return state, tiles, first_corner, n_tiles
 
 

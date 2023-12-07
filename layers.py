@@ -152,9 +152,10 @@ class MaskedStableSoftmax(nn.Module):
 
     def forward(self, logits,mask):
 
-        if torch.logical_not(mask).count_nonzero() == 0:
-            raise Exception("No playable tile")
         logits = logits - logits.max(dim=-1, keepdim=True).values
-        print(torch.logical_not(mask).count_nonzero(dim=-1))
-        print(torch.argmax(torch.softmax(logits - self.eps*mask,-1),-1))
+        # print(torch.logical_not(mask).count_nonzero(dim=-1))
+        # print(torch.argmax(torch.softmax(logits - self.eps*mask,-1),-1))
+        if 0 in torch.logical_not(mask).count_nonzero(-1):
+            print(mask)
+            raise Exception("No playable tile")
         return torch.softmax(logits - self.eps*mask,-1) 

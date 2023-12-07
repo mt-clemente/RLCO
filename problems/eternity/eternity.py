@@ -259,8 +259,8 @@ class EternityPuzzle:
         return min(all)
 
     def verify_solution(self,solution):
+        print(self.piece_list)
         hash_init = sorted([self.hash_piece(p) for p in self.piece_list])
         hash_sol = sorted([self.hash_piece(p) for p in solution])
-
         return hash_init == hash_sol
 

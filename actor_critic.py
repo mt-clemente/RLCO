@@ -253,7 +253,7 @@ class Critic(nn.Module):
             src=src_inputs,
             tgt=tgt_inputs,
             tgt_mask=tgt_mask,
-            src_key_padding_mask=src_key_padding_mask,
+            src_key_padding_mask=torch.logical_not(src_key_padding_mask),
             tgt_key_padding_mask=tgt_key_padding_mask
         )
 

@@ -91,8 +91,8 @@ class Eternity(COProblem):
         max_size = state.size(0)
         state_ = fromseq(state,size)
         side_size = int(size**0.5)
-        for _ in range(4):
-            tile = tile.roll(self.color_embedding_size,-1)
+        for i in range(4):
+            tile = tile.roll(1,-1)
             state_[step // side_size+1, step % side_size+1,:] = tile
             conflicts, connect, reward = self.filling_connections(state_,side_size,step)
             if connect > best_connect:
@@ -165,4 +165,15 @@ class Eternity(COProblem):
 
     def display_solution(self,state,file,size):
         self.pz.board_size=int(size**0.5)
-        self.pz.display_solution(state.tolist(),file)
+        st = state.clone()
+        st = st[:,[0,2,1,3]]
+        st = st.tolist()
+        self.pz.display_solution(st,file)
+
+
+    def verify_solution(self,state,size):
+        sol = state[:size,[0,2,1,3]]
+        sol = sol.int().tolist()
+        sol = [tuple(x) for x in sol]
+
+        return self.pz.verify_solution(sol)

@@ -28,7 +28,7 @@ class RLCOSolver():
             pb:COProblem = problem(self.cfg['problem'])
 
         except KeyError:
-            pb:COProblem = problem(self.cfg['network']['dim_embed'])
+            pb:COProblem = problem(self.cfg['network']['dim_embed']) #FIXME:
 
         device = 'cuda' if torch.cuda.is_available() and (self.cfg['cuda']) else 'cpu'
 

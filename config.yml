@@ -41,7 +41,7 @@ training:
   num_workers: 2
   checkpoint_period: 100
   minibatch_size: 27
-  horizon: 10
+  horizon: 3
   opt_epsilon: 1.0e-4
   gamma: 0.94
   clip_eps: 0.16

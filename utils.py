@@ -57,6 +57,7 @@ class TrainingManager():
 
                 
         self.sizes= torch.tensor([i.size for i in self.instances])
+        self.ep_len = torch.tensor([i.num_segments for i in self.instances])
         self.init_states = copy.deepcopy(self.states)
 
         self.instance_lengths = torch.tensor([x.size for x in self.instances])
@@ -106,21 +107,21 @@ class TrainingManager():
 
 
     def step(self,actions):
-
+        # self.states[finals] = self.init_states[finals]
+        
+        finals = self.get_finals()
         self.curr_step += 1
         self.masks[torch.arange(self.masks.size(0)),actions] = False
-        print(actions,self.masks)
-        print('*********')
+
         # New episode
-        finals = (self.curr_step % self.instance_lengths) == 0
-        self.states[finals] = self.init_states[finals]
         self.masks[finals] = self.src_key_padding_masks[finals]
 
-        # FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:
-        if self.curr_step >= self.max_inst_size: #FIXME: +- 1?
-            print(f"EPISODE {self.episode} : {self.best_perf}" )#FIXME: +- Custom perf?
-            self.episode += 1
-            self.reset()
+
+        # # FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:
+        # if self.curr_step >= self.max_inst_size: #FIXME: +- 1?
+        #     print(f"EPISODE {self.episode} : {self.best_perf}" )#FIXME: +- Custom perf?
+        #     self.episode += 1
+        #     self.reset()
 
     def finalize_rollout(self,states):
         self.states = states
@@ -148,10 +149,14 @@ class TrainingManager():
     
 
     def get_ep_step(self):
-        return self.curr_step % self.instance_lengths
+        return self.curr_step % self.ep_len
 
     def get_finals(self):
-        return (self.curr_step+1) % self.instance_lengths == 0
+
+        if self.curr_step <= 1:
+            return torch.zeros_like(self.ep_len) == 1 # all False
+        
+        return (self.curr_step+1) % self.ep_len == 0
 
     def batch_attributes(self):
         return (

@@ -120,8 +120,8 @@ class PPOAgent(nn.Module):
                 src_inputs=src_inputs,
                 tgt_inputs=tgt_inputs,
                 timesteps=timestep_step,
+                src_key_padding_mask=src_key_padding_masks,
                 tgt_key_padding_mask=tgt_key_padding_mask,
-                src_key_padding_mask=src_key_padding_masks
             )
 
             value_steps.append(value_step.squeeze())
@@ -162,7 +162,6 @@ class PPOAgent(nn.Module):
 
         ) = manager.get_training_state()
 
-
         for _ in range(manager.horizon):#FIXME: -1
             
             steps = manager.get_ep_step()
@@ -200,13 +199,15 @@ class PPOAgent(nn.Module):
             )
         
             states = new_states
-            states[finals,:,:] = manager.init_states[finals,:,:]
+
             # update finals / masks based on actions taken
+            states[finals,:,:] = manager.init_states[finals,:,:]
             manager.step(actions)
 
         # inject the states at the end of the horizon, needed to calculate advantages
         manager.finalize_rollout(states)
 
+        print(self.pb.verify_solution(states[-1],manager.sizes[-1]))
         self.pb.display_solution(states[0],'temp.png',manager.sizes[0])
         self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
 
@@ -221,7 +222,6 @@ class PPOAgent(nn.Module):
         types
         """
 
-        self.pb.display_solution(states[0],'tempm1.png',sizes[0])
         actions = torch.multinomial(policies,1).squeeze()
         added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
         # FIXME: Remove that
@@ -229,7 +229,11 @@ class PPOAgent(nn.Module):
             raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,sizes)
         
         new_states, rewards = self.pb.act(states,added_tokens,steps,sizes)
-        print(added_tokens[0])
+        self.pb.display_solution(new_states[1],'tempm1.png',sizes[1])
+        print('--VERIF--------------------------')
+        print(self.pb.verify_solution(new_states[1],sizes[1]),steps[1])
+        print('------------------------END------')
+
         return new_states, rewards, policies[torch.arange(policies.size(0)),actions], actions
 
 
