@@ -1,6 +1,5 @@
-import copy
 from pathlib import Path
-from einops import rearrange, repeat
+from einops import rearrange
 import torch
 from datetime import datetime
 import torch
@@ -12,7 +11,7 @@ from torch.utils.data import TensorDataset,DataLoader
 from actor_critic import ActorCritic
 from buffer import Buffer
 from cop_class import COPInstance, COProblem
-from utils import Environment, load_config
+from environment import Environment
 
 DEBUG = False
 
@@ -27,7 +26,6 @@ class PPOAgent(nn.Module):
 
     def __init__(self,
                  cfg:dict,
-                 max_instance_size,
                  pb:COProblem,
                  instances:list[COPInstance],
                  max_num_segments,
@@ -74,17 +72,14 @@ class PPOAgent(nn.Module):
 
     def get_policy(
             self,
-            states,
-            segments,
+            state_tokens,
+            segment_tokens,
             timesteps,
             valid_action_mask,
             src_key_padding_masks,
-            tgt_mask,
-            device
+            tgt_mask
             ):
 
-
-        state_tokens, segment_tokens = self.pb.tokenize(states.to(device),segments.to(device))
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
@@ -158,42 +153,37 @@ class PPOAgent(nn.Module):
 
         return advantages, returns_to_go,values
 
-    def rollout(self,manager:Environment):
+    def rollout(self,env:Environment):
 
         (
-            states,
-            segments
+            _,
+            _,
+            action_masks,
+            steps
 
-        ) = manager.get_training_state()
+        ) = env.get_training_state()
 
         t0 = datetime.now()
 
-        for _ in range(manager.horizon):#FIXME: -1
+        for _ in range(env.horizon):#FIXME: -1
             
-            steps = manager.get_ep_step()
-            action_masks = self.pb.valid_action_mask_(states,segments,manager.masks)
 
             with torch.no_grad():
+                state_tokens, segment_tokens = env.get_tokens()
                 policy = self.get_policy(
-                    states=states,
-                    segments=segments,
+                    state_tokens=state_tokens,
+                    segment_tokens=segment_tokens,
                     timesteps=steps,
                     valid_action_mask=action_masks,
-                    src_key_padding_masks=manager.src_key_padding_masks,
-                    tgt_mask=manager.causal_mask,
-                    device=manager.device
+                    src_key_padding_masks=env.src_key_padding_masks, #FIXME: the masks should end up being all through
+                    tgt_mask=env.causal_mask #FIXME: better env gestion
                 )
 
-            new_states, rewards, probs, actions = self.increment_states(
-                states=states,
-                segments=segments,
-                policies=policy,
-                steps=steps,
-                sizes=manager.sizes,
-                
-            )
+            actions = torch.multinomial(policy,1).squeeze()
+            probs = policy[torch.arange(policy.size(0)),actions]
+            
 
-            finals = manager.get_finals()
+            states, _, rewards, done, action_masks, steps = env.step(actions)
 
             self.buf.push(
                 state=states,
@@ -202,42 +192,12 @@ class PPOAgent(nn.Module):
                 mask=action_masks,
                 reward=rewards,
                 ep_step=steps,
-                final=finals
+                final=done
             )
         
-            states = new_states
-
-            # update finals / masks based on actions taken
-            states[finals,:,:] = manager.init_states[finals,:,:]
-            manager.step(actions)
-
         # inject the states at the end of the horizon, needed to calculate advantages
-        manager.finalize_rollout(states)
-
-        self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
-        
-        print(f"Rollout - step {manager.curr_step} : {datetime.now()-t0}")
-
-        
-    def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps,sizes):
-        """
-        Adds the tokens selected by the policies to the current states.
-        Returns new states, associated rewards, probabilities for each action w.r.t the current
-        policy, and the actions (chosen action indexes).
-
-        TODO: For the parallel version, the states are tensors, might need to add support for Any 
-        types
-        """
-
-        actions = torch.multinomial(policies,1).squeeze()
-        added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
-
-        if 0 in added_tokens.sum(-1).squeeze():
-            raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,sizes)
-        
-        new_states, rewards = self.pb.act(states,added_tokens,steps,sizes)
-
-        return new_states, rewards, policies[torch.arange(policies.size(0)),actions], actions
+        self.buf.horzion_timesteps = steps + 1 % env.instance_lengths
+        print(f"Rollout - step {env.curr_step} : {datetime.now()-t0}")
 
 
     def update(self,manager:Environment):
@@ -272,18 +232,6 @@ class PPOAgent(nn.Module):
             rearrange(returns,'i s -> (i s)'),
             torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
         )
-
-        # dataset = TensorDataset(
-        #     self.buf.state_buf[0],
-        #     self.buf.act_buf[0],
-        #     values[0],
-        #     self.buf.mask_buf[0],
-        #     self.buf.policy_buf[0],
-        #     self.buf.timestep_buf[0],
-        #     advantages[0],
-        #     returns[0],
-        #     torch.arange(1,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
-        # )
 
         loader = DataLoader(dataset, batch_size=self.train_cfg['minibatch_size'], shuffle=True, drop_last=False)
 
@@ -410,10 +358,3 @@ class PPOAgent(nn.Module):
 
 
         self.buf.reset()
-
-        # for worker in self.workers:
-        #     worker.load_state_dict(self.model.state_dict())
-
-
-
-

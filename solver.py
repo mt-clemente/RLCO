@@ -4,7 +4,7 @@ import torch
 from buffer import Buffer
 from cop_class import COProblem
 from ppo import PPOAgent
-from utils import Environment, load_config
+from environment import Environment, load_config
 
 
 
@@ -54,7 +54,6 @@ class RLCOSolver():
         self.agent = PPOAgent(
             cfg=self.cfg,
             buf=buf,
-            max_instance_size=self.manager.max_inst_size,
             max_num_segments=self.manager.max_num_segments,
             eval_model_dir=eval_model_dir,
             pb=pb,

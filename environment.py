@@ -98,17 +98,17 @@ class Environment():
 
     def get_training_state(self):
 
-        return (
-            self.states,
-            self.segments
-        )
+        steps = self.get_ep_step()
+        action_masks = self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
+
+        return self.states, self.segments, action_masks, steps
     
 
 
-    def step(self,actions):
+    def step_(self,actions):
         # self.states[finals] = self.init_states[finals]
         
-        finals = self.get_finals()
+        finals = self.get_dones()
         self.curr_step += 1
         self.masks[torch.arange(self.masks.size(0)),actions] = False
 
@@ -132,25 +132,21 @@ class Environment():
         
         return src_key_padding_mask.to(self.device)
     
-    def get_tokens_batch(self):
+    def get_tokens(self):
         """
         Returns a matrix containing the tokens of all the instances in the batch
         and a list of the corresponding instance sizes.
         """
 
-        token_batch = torch.zeros(self.num_instances,self.max_inst_size)
+        state_tokens, segment_tokens = self.pb.tokenize(self.states,self.segments)
 
-        for i,ins in enumerate(self.instances):
-            tokens = self.pb.tokenize(ins)
-            token_batch[i,:self.instance_lengths[i]] = tokens
-
-        return token_batch, self.instance_lengths
+        return state_tokens.to(self.device), segment_tokens.to(self.device)
     
 
     def get_ep_step(self):
         return self.curr_step % self.ep_len
 
-    def get_finals(self):
+    def get_dones(self):
 
         if self.curr_step <= 1:
             return torch.zeros_like(self.ep_len) == 1 # all False
@@ -164,6 +160,35 @@ class Environment():
             self.max_num_segments,
             self.dim_token
         )
+
+
+
+    def step(self,actions:torch.Tensor):
+
+        self.curr_step += 1
+
+        dones = self.get_dones()
+        steps = self.get_ep_step()
+
+        added_tokens = self.segments[torch.arange(self.segments.size(0),device=self.segments.device),actions]
+        if 0 in added_tokens.sum(-1).squeeze():
+            raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,self.sizes)
+        
+
+        new_states, rewards = self.pb.act(self.states,added_tokens,steps,self.sizes)
+
+        action_masks = self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
+        self.states = new_states
+        self.states[dones] = self.init_states[dones]
+
+
+        return self.states, self.segments, rewards, dones, action_masks, steps
+
+
+
+
+
+
 
 
 
@@ -195,3 +220,4 @@ def load_config(path:Path):
         cfg['training']['separate_value_training'] = cfg['network']['separate_value_training']
 
     return cfg
+
