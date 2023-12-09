@@ -1,4 +1,4 @@
-cuda: False
+cuda: True
 log_every: 20
 # categorical_token_vocab_size: 23
 # dim_token: 4
@@ -15,18 +15,18 @@ network:
   actor:  
     pointer: False
     hidden_size: 512
-    n_encoder_layers: 1
-    n_decoder_layers: 1
+    n_encoder_layers: 4
+    n_decoder_layers: 4
     nhead: 5
 
   critic:  
     hidden_size: 512
-    n_encoder_layers: 1
+    n_encoder_layers: 2
     n_decoder_layers: 1
     nhead: 5
 
   optimizer:
-    lr: 1.0e-4
+    lr: 5.0e-5
   
   value_weight: 0.5
   policy_weight: 1
@@ -40,8 +40,8 @@ training:
   epochs: 3
   num_workers: 2
   checkpoint_period: 100
-  minibatch_size: 27
-  horizon: 3
+  minibatch_size: 64
+  horizon: 40
   opt_epsilon: 1.0e-4
   gamma: 0.94
   clip_eps: 0.16

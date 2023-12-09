@@ -17,6 +17,8 @@ class Eternity(COProblem):
         MAX_COLORS = 23
         self.color_embedding_size = dim_embedding//4
 
+        if device is None:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         self.color_embedding = nn.Embedding(
             num_embeddings=MAX_COLORS,
@@ -56,7 +58,6 @@ class Eternity(COProblem):
         return new_states, rewards
     
     def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
-
         state_ = self.color_embedding(states.int())
         segments_ = self.color_embedding(segments.int())
 
@@ -171,9 +172,9 @@ class Eternity(COProblem):
         self.pz.display_solution(st,file)
 
 
-    def verify_solution(self,state,size):
+    def verify_solution(self,state,segments,size):
         sol = state[:size,[0,2,1,3]]
         sol = sol.int().tolist()
-        sol = [tuple(x) for x in sol]
-
-        return self.pz.verify_solution(sol)
+        sol = [tuple(x) for x in sol][1:]
+        seg = [tuple(x) for x in segments[:,[0,2,1,3]].tolist()]
+        return self.pz.verify_solution(sol,seg)

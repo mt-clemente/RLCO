@@ -11,8 +11,8 @@ from torch.utils.data import TensorDataset,DataLoader
 
 from actor_critic import ActorCritic
 from buffer import Buffer
-from cop_class import COProblem
-from utils import TrainingManager, load_config
+from cop_class import COPInstance, COProblem
+from utils import Environment, load_config
 
 DEBUG = False
 
@@ -29,6 +29,7 @@ class PPOAgent(nn.Module):
                  cfg:dict,
                  max_instance_size,
                  pb:COProblem,
+                 instances:list[COPInstance],
                  max_num_segments,
                  buf:Buffer,
                  init_state = None,
@@ -40,6 +41,7 @@ class PPOAgent(nn.Module):
 
         self.train_cfg:dict = cfg['training']
         self.pb = pb
+        self.instances = instances
         self.buf = buf
         self.value_weight = cfg['network']['value_weight']
         self.policy_weight = cfg['network']['policy_weight']
@@ -78,9 +80,11 @@ class PPOAgent(nn.Module):
             valid_action_mask,
             src_key_padding_masks,
             tgt_mask,
+            device
             ):
 
-        state_tokens, segment_tokens = self.pb.tokenize(states,segments)
+
+        state_tokens, segment_tokens = self.pb.tokenize(states.to(device),segments.to(device))
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
@@ -102,7 +106,7 @@ class PPOAgent(nn.Module):
         # FIXME: Timesteps
         # State dims are [instance,step,state,token]
         states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
-        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1)),dim=1).transpose(0,1).unsqueeze(-1)
+        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1).transpose(0,1).unsqueeze(-1)
         rewards = buf.rew_buf
         finals = buf.final_buf
 
@@ -154,13 +158,15 @@ class PPOAgent(nn.Module):
 
         return advantages, returns_to_go,values
 
-    def rollout(self,manager:TrainingManager):
+    def rollout(self,manager:Environment):
 
         (
             states,
             segments
 
         ) = manager.get_training_state()
+
+        t0 = datetime.now()
 
         for _ in range(manager.horizon):#FIXME: -1
             
@@ -174,7 +180,8 @@ class PPOAgent(nn.Module):
                     timesteps=steps,
                     valid_action_mask=action_masks,
                     src_key_padding_masks=manager.src_key_padding_masks,
-                    tgt_mask=manager.causal_mask
+                    tgt_mask=manager.causal_mask,
+                    device=manager.device
                 )
 
             new_states, rewards, probs, actions = self.increment_states(
@@ -207,9 +214,9 @@ class PPOAgent(nn.Module):
         # inject the states at the end of the horizon, needed to calculate advantages
         manager.finalize_rollout(states)
 
-        print(self.pb.verify_solution(states[-1],manager.sizes[-1]))
-        self.pb.display_solution(states[0],'temp.png',manager.sizes[0])
         self.buf.horzion_timesteps = steps + 1 % manager.instance_lengths
+        
+        print(f"Rollout - step {manager.curr_step} : {datetime.now()-t0}")
 
         
     def increment_states(self,states,segments:torch.Tensor,policies:torch.Tensor,steps,sizes):
@@ -224,20 +231,16 @@ class PPOAgent(nn.Module):
 
         actions = torch.multinomial(policies,1).squeeze()
         added_tokens = segments[torch.arange(segments.size(0),device=segments.device),actions]
-        # FIXME: Remove that
+
         if 0 in added_tokens.sum(-1).squeeze():
             raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,sizes)
         
         new_states, rewards = self.pb.act(states,added_tokens,steps,sizes)
-        self.pb.display_solution(new_states[1],'tempm1.png',sizes[1])
-        print('--VERIF--------------------------')
-        print(self.pb.verify_solution(new_states[1],sizes[1]),steps[1])
-        print('------------------------END------')
 
         return new_states, rewards, policies[torch.arange(policies.size(0)),actions], actions
 
 
-    def update(self,manager:TrainingManager):
+    def update(self,manager:Environment):
         """
         Updates the ppo agent, using the trajectories in the memory buffer.
         For states, policy, rewards, advantages, and timesteps the data is in a 
@@ -270,7 +273,6 @@ class PPOAgent(nn.Module):
             torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
         )
 
-
         # dataset = TensorDataset(
         #     self.buf.state_buf[0],
         #     self.buf.act_buf[0],
@@ -289,6 +291,7 @@ class PPOAgent(nn.Module):
         for k in range(self.train_cfg['epochs']):
             for batch in loader:
 
+
                 (
                     batch_states,
                     batch_actions,
@@ -301,7 +304,7 @@ class PPOAgent(nn.Module):
                     instance_ids
                     
                 ) = batch
-
+                
                 # FIXME: self. wtf??
              
                 embedded_states, embedded_segments = manager.pb.tokenize(batch_states,manager.segments[instance_ids])
@@ -393,12 +396,14 @@ class PPOAgent(nn.Module):
                     self.model.optimizer.step()
 
 
-        print(datetime.now()-t0)
+        print("Update : ",datetime.now()-t0)
         wandb.log({
             # "Current learning rate":self.scheduler.get_last_lr()[0],
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
+            "Returns":returns.mean(),
+            "Average horizon reward":self.buf.rew_buf.mean(),
             "Value repartition":batch_values.squeeze(-1).detach(),
             # "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })

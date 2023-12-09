@@ -31,8 +31,8 @@ TODO:
  - Use partial solutions for transf?? Aka manage sequence length, is it useful? --> Not for now
 
 """
-torch.cuda.is_available = lambda : False
-torch.autograd.set_detect_anomaly(True)
+# torch.cuda.is_available = lambda : False
+# torch.autograd.set_detect_anomaly(True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')

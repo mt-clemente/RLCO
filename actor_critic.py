@@ -18,7 +18,7 @@ class ActorCritic(nn.Module):
         super().__init__()
 
         self.num_segments = num_segments
-
+        self.device = device
         act_cfg = cfg['actor']
 
         self.actor = Actor(
@@ -71,8 +71,7 @@ class ActorCritic(nn.Module):
         src_inputs = self.embed_segment_ln(embedded_segments)
         tgt_inputs = self.embed_state_ln(embedded_states)
         tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps
-
-        return src_inputs, tgt_inputs, tgt_key_padding_mask
+        return src_inputs, tgt_inputs, tgt_key_padding_mask.to(self.device)
 
 
 
@@ -205,7 +204,7 @@ class Actor(nn.Module):
                 tgt_key_padding_mask=tgt_key_padding_mask
             )
 
-            policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps.squeeze()].reshape(batch_size,self.dim_embed))
+            policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed))
             policy_pred = self.policy_head(policy_logits,valid_action_mask)
 
         return policy_pred
@@ -257,7 +256,11 @@ class Critic(nn.Module):
             tgt_key_padding_mask=tgt_key_padding_mask
         )
 
-        tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed)
+        # print(tgt_tokens.size())
+        # print(timesteps)
+        # print(batch_size)
+        # print(src_inputs.size())
+        tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()].reshape(batch_size,self.dim_embed)
         value_pred = self.critic_head(tgt_tokens)
 
         return value_pred

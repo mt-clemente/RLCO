@@ -258,9 +258,8 @@ class EternityPuzzle:
         all = self.generate_rotation(piece)
         return min(all)
 
-    def verify_solution(self,solution):
-        print(self.piece_list)
-        hash_init = sorted([self.hash_piece(p) for p in self.piece_list])
+    def verify_solution(self,solution,piece_list):
+        hash_init = sorted([self.hash_piece(p) for p in piece_list])
         hash_sol = sorted([self.hash_piece(p) for p in solution])
         return hash_init == hash_sol
 

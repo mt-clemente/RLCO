@@ -5,7 +5,7 @@ import yaml
 from cop_class import COProblem
 import torch.nn.functional as F
 
-class TrainingManager():
+class Environment():
     """
     Used to monitor and manage the training.
     The current implementation does not cycle smaller implementations
@@ -13,12 +13,11 @@ class TrainingManager():
     nb of steps than the biggest instance of the batch), #TODO: for now
     it 'fills' the now empty threads with unfinished bigger instances.
 
-    FIXME: 
-     - 'THREAD' reoccupation when shorter instances are complete.
     TODO: 
      - add performance stopping
      - add sequential action masks where the masks are calculated based
        on the previous mask, and not in 'closed form'
+     - initial state mgt ? --> Directly in the COP Init
     """
 
     def __init__(self,cfg,instances_path:Path,problem:COProblem,device) -> None:
@@ -129,9 +128,9 @@ class TrainingManager():
     def init_masks(self):
         
         # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_num_segments, device=self.device).expand((self.num_instances,-1)) < self.instance_num_segments.unsqueeze(-1)
+        src_key_padding_mask = torch.arange(self.max_num_segments).expand((self.num_instances,-1)) < self.instance_num_segments.unsqueeze(-1)
         
-        return src_key_padding_mask
+        return src_key_padding_mask.to(self.device)
     
     def get_tokens_batch(self):
         """

@@ -4,7 +4,7 @@ import torch
 from buffer import Buffer
 from cop_class import COProblem
 from ppo import PPOAgent
-from utils import TrainingManager, load_config
+from utils import Environment, load_config
 
 
 
@@ -32,7 +32,7 @@ class RLCOSolver():
 
         device = 'cuda' if torch.cuda.is_available() and (self.cfg['cuda']) else 'cpu'
 
-        self.manager = TrainingManager(self.cfg['training'],instances_path,pb,device=device)
+        self.manager = Environment(self.cfg['training'],instances_path,pb,device=device)
 
         (
             num_instances,
@@ -58,6 +58,7 @@ class RLCOSolver():
             max_num_segments=self.manager.max_num_segments,
             eval_model_dir=eval_model_dir,
             pb=pb,
+            instances=self.manager.instances,
             device=device,
             load_list=load_list
         )
