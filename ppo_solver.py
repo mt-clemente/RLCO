@@ -32,7 +32,7 @@ class RLCOSolver():
 
         device = 'cuda' if torch.cuda.is_available() and (self.cfg['cuda']) else 'cpu'
 
-        self.manager = Environment(self.cfg['training'],instances_path,pb,device=device)
+        self.env = Environment(self.cfg['training'],instances_path,pb,device=device)
 
         (
             num_instances,
@@ -40,7 +40,7 @@ class RLCOSolver():
             max_num_segments,
             dim_token
 
-        ) = self.manager.batch_attributes()
+        ) = self.env.batch_attributes()
 
         buf = Buffer(
             cfg=self.cfg,
@@ -54,10 +54,10 @@ class RLCOSolver():
         self.agent = PPOAgent(
             cfg=self.cfg,
             buf=buf,
-            max_num_segments=self.manager.max_num_segments,
+            max_num_segments=self.env.max_num_segments,
             eval_model_dir=eval_model_dir,
             pb=pb,
-            instances=self.manager.instances,
+            instances=self.env.instances,
             device=device,
             load_list=load_list
         )
@@ -67,10 +67,10 @@ class RLCOSolver():
     def train(self):
 
         try:
-            while self.manager.stop_criterion():
+            while self.env.stop_criterion():
 
-                self.agent.rollout(self.manager)
-                self.agent.update(self.manager)
+                self.agent.rollout(self.env)
+                self.agent.update(self.env)
                 
                 # if self.manager.episode % self.cfg['checkpoint_period']:
                     #TODO: Save models

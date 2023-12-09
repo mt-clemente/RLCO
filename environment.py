@@ -4,7 +4,7 @@ import torch
 import yaml
 from cop_class import COProblem
 import torch.nn.functional as F
-
+import warnings
 class Environment():
     """
     Used to monitor and manage the training.
@@ -20,7 +20,7 @@ class Environment():
      - initial state mgt ? --> Directly in the COP Init
     """
 
-    def __init__(self,cfg,instances_path:Path,problem:COProblem,device) -> None:
+    def __init__(self,cfg,instance_path:Path,problem:COProblem,device) -> None:
 
         self.device = device
         self.pb = problem
@@ -28,9 +28,28 @@ class Environment():
 
         # Batch mgt
         instances = []
-        for file in instances_path.iterdir():
-            inst = self.pb.load_instance(file)
-            instances.append(inst)
+
+        if instance_path.is_dir():
+
+            if cfg['num_workers'] < len(list(instance_path.iterdir())):
+                warnings.warn('Number of workers lower than number of instances in the given directory, only loading the first n_w files',UserWarning,stacklevel=2)
+            
+            for i,file in enumerate(instance_path.iterdir()):
+                inst = self.pb.load_instance(file)
+                instances.append(inst)
+
+                if i >= cfg['num_workers']:
+                    break
+
+        else:
+
+            if cfg['num_workers'] is None:
+                warnings.warn("Number of workers not in config, defaulting to 1",UserWarning)
+                cfg['num_workers'] = 1
+
+            for _ in range(cfg['num_workers']):
+                inst = self.pb.load_instance(instance_path)
+                instances.append(inst)
 
         self.instances = instances
         self.max_inst_size = max([i.size for i in self.instances])
@@ -218,6 +237,9 @@ def load_config(path:Path):
         cfg['training']['separate_value_training'] = False
     else:
         cfg['training']['separate_value_training'] = cfg['network']['separate_value_training']
+
+    if not 'num_workers' in cfg['training'].keys():
+        cfg['training']['num_workers'] = None
 
     return cfg
 

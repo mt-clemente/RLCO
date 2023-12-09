@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 import wandb
-from solver import RLCOSolver
+from ppo_solver import RLCOSolver
 import argparse
 from problems.eternity_cop import Eternity
 
@@ -36,7 +36,7 @@ TODO:
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')
-parser.add_argument('--files', dest='files',type=str,default='instances')
+parser.add_argument('--files', dest='files',type=str,default='instances/eternity_A.txt')
 
 args = parser.parse_args()
 
