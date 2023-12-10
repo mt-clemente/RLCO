@@ -36,7 +36,7 @@ TODO:
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')
-parser.add_argument('--files', dest='files',type=str,default='instances/eternity_A.txt')
+parser.add_argument('--files', dest='files',type=str,default='instances/eternity_B.txt')
 
 args = parser.parse_args()
 

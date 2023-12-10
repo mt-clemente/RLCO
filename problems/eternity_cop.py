@@ -50,9 +50,14 @@ class Eternity(COProblem):
             sizes
             )):
 
-            n_state, reward = self.place_tile(state,segment,step,size)
+            n_state, conflict = self.place_tile(state,segment,step,size)
 
             new_states[i] = n_state
+
+            if conflict == 0:
+                reward = 1
+            else:
+                reward = -conflict
             rewards[i] = reward
 
         return new_states, rewards
@@ -176,5 +181,5 @@ class Eternity(COProblem):
         sol = state[:size,[0,2,1,3]]
         sol = sol.int().tolist()
         sol = [tuple(x) for x in sol][1:]
-        seg = [tuple(x) for x in segments[:,[0,2,1,3]].tolist()]
+        seg = [tuple(x) for x in segments[:,[0,2,1,3]].int().tolist()]
         return self.pz.verify_solution(sol,seg)

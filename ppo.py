@@ -86,7 +86,7 @@ class PPOAgent(nn.Module):
             segment_tokens=segment_tokens,
             timesteps=timesteps,
             valid_action_mask=valid_action_mask,
-            src_key_padding_masks=src_key_padding_masks,
+            src_key_padding_masks=torch.logical_not(src_key_padding_masks),#FIXME: remove not fix masks
             tgt_mask=tgt_mask,
         )
 
@@ -167,7 +167,6 @@ class PPOAgent(nn.Module):
 
         for _ in range(env.horizon):#FIXME: -1
             
-
             with torch.no_grad():
                 state_tokens, segment_tokens = env.get_tokens()
                 policy = self.get_policy(
@@ -178,13 +177,11 @@ class PPOAgent(nn.Module):
                     src_key_padding_masks=env.src_key_padding_masks, #FIXME: the masks should end up being all through
                     tgt_mask=env.causal_mask #FIXME: better env gestion
                 )
-
             actions = torch.multinomial(policy,1).squeeze()
             probs = policy[torch.arange(policy.size(0)),actions]
             
 
             states, _, rewards, done, action_masks, steps = env.step(actions)
-
             self.buf.push(
                 state=states,
                 policy=probs,
@@ -194,8 +191,7 @@ class PPOAgent(nn.Module):
                 ep_step=steps,
                 final=done
             )
-        
-        # inject the states at the end of the horizon, needed to calculate advantages
+
         self.buf.horzion_timesteps = steps + 1 % env.instance_lengths
         print(f"Rollout - step {env.curr_step} : {datetime.now()-t0}")
 
@@ -294,7 +290,7 @@ class PPOAgent(nn.Module):
                 # Calculate value function loss
                 value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns_norm) * self.value_weight
                 # Calculate entropy bonus
-                entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(dim=-1).mean()
+                entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(-1).mean()
                 entropy_loss = -self.entropy_weight * entropy
                 # Compute total loss and update parameters
 
@@ -341,7 +337,6 @@ class PPOAgent(nn.Module):
                     # print("ratio",((ratio > 1 + self.ac_cfg['clip_eps']).count_nonzero() + (ratio < 1 - self.ac_cfg['CLIP_EPS']).count_nonzero()))
                     print("bst",batch_states.max())
                     print("bst",batch_states.min())
-                    self.model.optimizer.step()
 
 
         print("Update : ",datetime.now()-t0)
@@ -351,6 +346,7 @@ class PPOAgent(nn.Module):
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
             "Returns":returns.mean(),
+            "Mean buffer reward":self.buf.rew_buf.mean(),
             "Average horizon reward":self.buf.rew_buf.mean(),
             "Value repartition":batch_values.squeeze(-1).detach(),
             # "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()

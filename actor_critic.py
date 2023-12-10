@@ -176,7 +176,6 @@ class Actor(nn.Module):
     def forward(self,src_inputs,tgt_inputs,timesteps,valid_action_mask,tgt_mask=None,src_key_padding_mask=None,tgt_key_padding_mask=None):
         
         batch_size = tgt_inputs.size(0)
-
         # autoregressive by default
         if tgt_mask is None:
             tgt_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device), diagonal=1)
@@ -197,11 +196,12 @@ class Actor(nn.Module):
             policy_pred = self.policy_attn_head(mem_tokens,tgt_tokens,torch.logical_not(valid_action_mask))
         
         else:
+            #FIXME: mask
             policy_tokens = self.transformer(
                 src=src_inputs,
                 tgt=tgt_inputs,
                 tgt_mask=tgt_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask
+                tgt_key_padding_mask=None
             )
 
             policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps.squeeze()+1].reshape(batch_size,self.dim_embed))

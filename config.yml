@@ -26,25 +26,25 @@ network:
     nhead: 5
 
   optimizer:
-    lr: 5.0e-5
+    lr: 1.0e-4
   
   value_weight: 0.5
   policy_weight: 1
-  entropy_weight: 0.08
+  entropy_weight: 0.0001
 
 # --------------------  SETTINGS -------------------- 
 
 training:
 
   gae_lambda: 0.9
-  epochs: 3
-  num_workers: 7
+  epochs: 1
+  num_workers: 128
   checkpoint_period: 100
-  minibatch_size: 64
-  horizon: 40
-  opt_epsilon: 1.0e-4
-  gamma: 0.94
-  clip_eps: 0.16
+  minibatch_size: 256
+  horizon: 15
+  opt_epsilon: 1.0e-5
+  gamma: 0.95
+  clip_eps: 0.12
 
   stop_criterion:
     type: 'inf'

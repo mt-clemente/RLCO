@@ -123,24 +123,6 @@ class Environment():
         return self.states, self.segments, action_masks, steps
     
 
-
-    def step_(self,actions):
-        # self.states[finals] = self.init_states[finals]
-        
-        finals = self.get_dones()
-        self.curr_step += 1
-        self.masks[torch.arange(self.masks.size(0)),actions] = False
-
-        # New episode
-        self.masks[finals] = self.src_key_padding_masks[finals]
-
-
-        # # FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:FIXME:
-        # if self.curr_step >= self.max_inst_size: #FIXME: +- 1?
-        #     print(f"EPISODE {self.episode} : {self.best_perf}" )#FIXME: +- Custom perf?
-        #     self.episode += 1
-        #     self.reset()
-
     def finalize_rollout(self,states):
         self.states = states
 
@@ -167,10 +149,7 @@ class Environment():
 
     def get_dones(self):
 
-        if self.curr_step <= 1:
-            return torch.zeros_like(self.ep_len) == 1 # all False
-        
-        return (self.curr_step+1) % self.ep_len == 0
+        return (self.curr_step) % (self.ep_len) == 0
 
     def batch_attributes(self):
         return (
@@ -184,22 +163,26 @@ class Environment():
 
     def step(self,actions:torch.Tensor):
 
-        self.curr_step += 1
-
-        dones = self.get_dones()
-        steps = self.get_ep_step()
-
         added_tokens = self.segments[torch.arange(self.segments.size(0),device=self.segments.device),actions]
         if 0 in added_tokens.sum(-1).squeeze():
             raise ValueError("Null token chosen: in the following segments : ",added_tokens,actions,self.sizes)
         
+        new_states, rewards = self.pb.act(self.states,added_tokens,self.get_ep_step(),self.sizes)
 
-        new_states, rewards = self.pb.act(self.states,added_tokens,steps,self.sizes)
+        self.curr_step += 1
 
-        action_masks = self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
+        dones = self.get_dones()
+        steps = self.get_ep_step()
+        self.masks[torch.arange(actions.size(0)),actions] = False
         self.states = new_states
-        self.states[dones] = self.init_states[dones]
 
+        # if self.pb.verify_solution(self.states[0],self.segments[0],self.sizes[0]):
+            # print(self.curr_step)
+        
+
+        self.states[dones] = self.init_states[dones]
+        self.masks[dones] = self.src_key_padding_masks[dones]
+        action_masks = self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
 
         return self.states, self.segments, rewards, dones, action_masks, steps
 
