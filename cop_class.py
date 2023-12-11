@@ -94,7 +94,6 @@ class COProblem(ABC):
 
 
 
-    @abstractmethod
     def valid_action_mask(self,states:torch.Tensor,segments:torch.Tensor) -> torch.BoolTensor:
         """
         Outputs a mask that is True if an action is valid from the current state,
@@ -111,6 +110,10 @@ class COProblem(ABC):
         else:
             return torch.logical_not(torch.logical_and(self.valid_action_mask(states,segments),used_mask))
 
+
+    @abstractmethod
+    def to_tokens(self,states,segments):
+        raise NotImplementedError
 
     def display_solution(self,solution,file):
         raise NotImplementedError

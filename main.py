@@ -5,6 +5,7 @@ import wandb
 from ppo_solver import RLCOSolver
 import argparse
 from problems.eternity_cop import Eternity
+from problems.tsp import TSP
 
 """
 TODO:
@@ -32,13 +33,13 @@ parser.add_argument('--files', dest='files',type=str,default='instances/eternity
 
 args = parser.parse_args()
 
-problem = Eternity
+problem = TSP
 
 
 trainer = RLCOSolver(
     config_path=args.cfg,
     instances_path=Path(args.files),
-    problem=Eternity,
+    problem=problem,
 )
 
 wandb.init(

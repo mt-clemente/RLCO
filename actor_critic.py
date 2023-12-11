@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers import MaskedStableSoftmax, Pointer, PositionalEncoding, PositionalEncoding2D, Transformer
+from layers import MaskedStableSoftmax, Pointer, PositionalEncoding, PositionalEncoding1D, PositionalEncoding2D, Transformer
 
 class ActorCritic(nn.Module):
 
@@ -46,7 +46,14 @@ class ActorCritic(nn.Module):
             self.embed_state = nn.Embedding(cfg['categorical_vocab_size'],self.dim_embed)
             self.embed_segment = nn.Embedding(cfg['categorical_vocab_size'],self.dim_embed)
 
-        self.positional_encoding = PositionalEncoding2D(cfg['dim_embed']) # FIXME: choose type
+        if cfg['pos_encoding'] == 1:
+            self.positional_encoding = PositionalEncoding2D(cfg['dim_embed']) # FIXME: choose type
+        elif cfg['pos_encoding'] == 2:
+            self.positional_encoding = PositionalEncoding1D(cfg['dim_embed']) # FIXME: choose type
+        else:
+            self.positional_encoding = lambda x:0
+
+            
         self.embed_state_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
         self.embed_segment_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
 
@@ -63,7 +70,6 @@ class ActorCritic(nn.Module):
         # FIXME: add positional encoding
 
         src_inputs = self.embed_segment_ln(embedded_segments)
-
         embedded_states += self.positional_encoding(embedded_states)
         tgt_inputs = self.embed_state_ln(embedded_states)
         tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps

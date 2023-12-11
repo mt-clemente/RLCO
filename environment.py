@@ -57,7 +57,6 @@ class Environment():
         self.num_instances = len(instances)
         self.segment_size = self.instances[0].state.size(-1)
 
-        # TODO: Init state mgt
         if isinstance(self.instances[0].state,torch.Tensor) and isinstance(self.instances[0].segments,torch.Tensor):
 
             self.states = torch.zeros((self.num_instances,self.max_inst_size,self.segment_size),device=device)

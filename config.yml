@@ -3,12 +3,18 @@ log_every: 20
 # categorical_token_vocab_size: 23
 # dim_token: 4
 
+# -------------------- PROBLEM SETTINGS -------------------- 
+problem:
+  env_size: 1
+  stops: 50
+
 # -------------------- NETWORK SETTINGS -------------------- 
 
 network:
 
   unit: 'torch.half'
-  dim_embed: 60
+  dim_embed: 64
+  pos_encoding: 0
   separate_value_training: False
   categorical_vocab_size: 23
 
@@ -17,16 +23,16 @@ network:
     hidden_size: 256
     n_encoder_layers: 6
     n_decoder_layers: 6
-    nhead: 5
+    nhead: 4
 
   critic:  
     hidden_size: 512
-    n_encoder_layers: 3
-    n_decoder_layers: 2
-    nhead: 5
+    n_encoder_layers: 1
+    n_decoder_layers: 1
+    nhead: 1
 
   optimizer:
-    lr: 4.0e-5
+    lr: 1.0e-3
   
   value_weight: 0.5
   policy_weight: 1
@@ -36,14 +42,15 @@ network:
 
 training:
 
-  gae_lambda: 0.9
-  epochs: 6
-  num_workers: 32
+  grad_clip: 1
+  gae_lambda: 0.94
+  epochs: 7
+  num_workers: 8
   checkpoint_period: 100
-  minibatch_size: 256
-  horizon: 20
+  minibatch_size: 32
+  horizon: 49
   opt_epsilon: 1.0e-5
-  gamma: 0.94
+  gamma: 0.97
   # gamma: 1
   clip_eps: 0.14
 

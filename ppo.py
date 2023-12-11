@@ -47,7 +47,7 @@ class PPOAgent(nn.Module):
         self.policy_weight = cfg['network']['policy_weight']
         self.entropy_weight = cfg['network']['entropy_weight']
         self.dim_embed = cfg['network']['dim_embed']
-        self.color_embedding_size = self.dim_embed//4
+        self.cat_embedding_size = self.dim_embed//4
         net_cfg = cfg['network']
 
         if device is None:
@@ -68,12 +68,21 @@ class PPOAgent(nn.Module):
             device=self.device
         )
 
-        
-        self.color_embedding = nn.Embedding(
-            num_embeddings=self.pb.categorical_size,
-            embedding_dim=self.color_embedding_size,
-            device=device
-        )
+        try:
+            self.embedding = nn.Embedding(
+                num_embeddings=self.pb.categorical_size,
+                embedding_dim=self.cat_embedding_size,
+                device=device
+            )
+            self.state_unit = torch.int
+
+        except AttributeError:
+            self.embedding = nn.Linear(
+                in_features=self.pb.token_size,
+                out_features=self.dim_embed,
+                device=device
+            )
+            self.state_unit = torch.float
 
         if not eval_model_dir is None:
             self.load_model(eval_model_dir,load_list)
@@ -92,7 +101,7 @@ class PPOAgent(nn.Module):
         if 'type' in opt_cfg.keys():
             match 'type':
                 case 'Adam':
-                    optimizer = torch.optim.Adam
+                    optimizer = torch.optim.AdamW
 
                 case 'SGD':
                     optimizer = torch.optim.SGD
@@ -101,9 +110,9 @@ class PPOAgent(nn.Module):
                     optimizer = torch.optim.RMSprop
         
         else:
-            optimizer = torch.optim.RMSprop
+            optimizer = torch.optim.AdamW
 
-        combined_params = list(self.model.parameters()) + list(self.color_embedding.parameters())
+        combined_params = list(self.model.parameters()) + list(self.embedding.parameters())
 
         return optimizer(combined_params,**opt_cfg)
 
@@ -112,11 +121,11 @@ class PPOAgent(nn.Module):
         raise NotImplementedError
 
     def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
-        state_ = self.color_embedding(states.int())
-        segments_ = self.color_embedding(segments.int())
+        
+        state_embeddings = self.embedding(states.to(self.state_unit))
+        segments_embeddings = self.embedding(segments.to(self.state_unit))
 
-        state_tokens = rearrange(state_, "b s t e -> b s (t e)")
-        segment_tokens = rearrange(segments_, "b s t e -> b s (t e)")
+        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segments_embeddings)
 
         return state_tokens.to(self.device), segment_tokens.to(self.device)
 
@@ -232,6 +241,19 @@ class PPOAgent(nn.Module):
                 final=done
             )
 
+            if done[0]:
+
+                cost = []
+                for i in range(states.size(0)):
+                    cost.append(self.pb.get_loss(new_states[i],sizes=env.sizes[i]))
+                
+                avg_cost = sum(cost)/len(cost)
+                wandb.log({
+                    "Mean worker loss":avg_cost,
+                    })
+                
+                print(avg_cost)
+            
             if True in done:
                 new_states, new_action_masks = env.reset(done) # Only reset where done is True
 
@@ -240,6 +262,7 @@ class PPOAgent(nn.Module):
             states = new_states
             steps = new_steps
 
+                
         self.buf.push_horizon(
             state=states,
             step=steps,
@@ -248,13 +271,6 @@ class PPOAgent(nn.Module):
 
         print(env.curr_step)
 
-        if done[0]:
-            conflicts = []
-            for i in range(states.size(0)):
-                conflicts.append(self.pb.get_conflicts(self.buf.state_buf[i,self.buf.ptr-1],env.sizes[i]))
-            wandb.log({
-                "Mean worker conflicts":sum(conflicts)/len(conflicts),
-                })
 
         print(f"Rollout {self.update_counter} - log total gathered {torch.log10(torch.tensor(env.curr_step*states.size(0))):.2f} : {datetime.now()-t0}")
         self.update_counter += 1
@@ -339,9 +355,9 @@ class PPOAgent(nn.Module):
 
                 )
 
-                batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                # batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
-                batch_returns_norm = batch_returns
+                # batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
+                batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                # batch_returns_norm = batch_returns
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1)).squeeze()

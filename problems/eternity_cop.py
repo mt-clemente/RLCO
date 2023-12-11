@@ -9,13 +9,9 @@ from einops import rearrange
 
 class Eternity(COProblem):
 
-    def __init__(self, dim_embedding, device=None) -> None:
-        super().__init__(dim_embedding, device)
-
-        assert not dim_embedding % 4 
+    def __init__(self, device=None) -> None:
 
         self.categorical_size = 23
-        self.color_embedding_size = dim_embedding//4
 
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -31,8 +27,7 @@ class Eternity(COProblem):
         return COPInstance(toseq(state).int(),tiles.int(),size = n_tiles,num_segments=n_tiles-1)
     
 
-    # TODO: Fix kwargs
-    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:torch.IntTensor,sizes, **kwargs) -> tuple:
+    def act(self, states:torch.Tensor, segments:torch.Tensor, steps:torch.IntTensor,sizes,actions=None) -> tuple:
 
         rewards = torch.zeros(len(states),device=states.device)
         new_states = torch.empty_like(states)
@@ -53,6 +48,8 @@ class Eternity(COProblem):
                 reward = 5
             else:
                 reward = 2-conflict
+
+            reward = -conflict
 
             rewards[i] = reward
 
@@ -146,7 +143,7 @@ class Eternity(COProblem):
     
         if j == bsize:
 
-            east_border_color = state[i,j,3*self.color_embedding_size:4*self.color_embedding_size]
+            east_border_color = state[i,j,3:4]
             sides += 1
             if torch.all(east_border_color == 0):
                 connections += 1
@@ -164,6 +161,11 @@ class Eternity(COProblem):
         return sides - connections, connections, reward
 
 
+    def to_tokens(self,states,segments):
+        state_tokens = rearrange(states, "b s t e -> b s (t e)")
+        segment_tokens = rearrange(segments, "b s t e -> b s (t e)")
+        return state_tokens,segment_tokens
+
 
     def display_solution(self,state,file,size):
         self.pz.board_size=int(size**0.5)
@@ -180,7 +182,7 @@ class Eternity(COProblem):
         seg = [tuple(x) for x in segments[:,[0,2,1,3]].int().tolist()]
         return self.pz.verify_solution(sol,seg)
     
-    def get_conflicts(self,state,size):
+    def get_loss(self,state,size):
         sol = state[:size,[0,2,1,3]]
         sol = sol.int().tolist()
         sol = [tuple(x) for x in sol]

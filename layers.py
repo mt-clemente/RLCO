@@ -122,7 +122,31 @@ def get_emb(sin_inp):
     return torch.flatten(emb, -2, -1)
     
 
-    
+class PositionalEncoding1D(nn.Module):
+    def __init__(self, channels, max_len=5000):
+        """
+        :param channels: The last dimension of the tensor you want to apply pos emb to.
+        :param max_len: The maximum length of the sequence.
+        """
+        super(PositionalEncoding1D, self).__init__()
+        self.channels = channels
+
+        # Create a long enough 'pe' matrix that can be sliced for shorter sequences
+        pe = torch.zeros(max_len, channels)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, channels, 2).float() * (-np.log(10000.0) / channels))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # Register 'pe' as a buffer that does not require gradients
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        """
+        :param x: A 3d tensor of size (batch_size, sequence_length, channels)
+        """
+        return self.pe[:x.size(1)].to(x.device)
+
 
 
 class Pointer(nn.Module):
