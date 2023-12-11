@@ -8,43 +8,44 @@ log_every: 20
 network:
 
   unit: 'torch.half'
-  dim_embed: 20
+  dim_embed: 60
   separate_value_training: False
   categorical_vocab_size: 23
 
   actor:  
     pointer: False
-    hidden_size: 512
-    n_encoder_layers: 4
-    n_decoder_layers: 4
+    hidden_size: 256
+    n_encoder_layers: 6
+    n_decoder_layers: 6
     nhead: 5
 
   critic:  
     hidden_size: 512
-    n_encoder_layers: 2
-    n_decoder_layers: 1
+    n_encoder_layers: 3
+    n_decoder_layers: 2
     nhead: 5
 
   optimizer:
-    lr: 1.0e-4
+    lr: 4.0e-5
   
   value_weight: 0.5
   policy_weight: 1
-  entropy_weight: 0.0001
+  entropy_weight: 0
 
 # --------------------  SETTINGS -------------------- 
 
 training:
 
   gae_lambda: 0.9
-  epochs: 1
-  num_workers: 128
+  epochs: 6
+  num_workers: 32
   checkpoint_period: 100
   minibatch_size: 256
-  horizon: 15
+  horizon: 20
   opt_epsilon: 1.0e-5
-  gamma: 0.95
-  clip_eps: 0.12
+  gamma: 0.94
+  # gamma: 1
+  clip_eps: 0.14
 
   stop_criterion:
     type: 'inf'

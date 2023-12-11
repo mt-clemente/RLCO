@@ -7,14 +7,6 @@ import argparse
 from problems.eternity_cop import Eternity
 
 """
-Cool because is anytime
-
-
-FIXME:
- - categorical vocab size ----> For now only works with categorical ---> No embedding needed for non categorical ----> ??
- - Fix causal mask (too slow version)
-
-
 TODO:
 
     - GTRXL

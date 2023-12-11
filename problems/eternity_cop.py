@@ -14,17 +14,12 @@ class Eternity(COProblem):
 
         assert not dim_embedding % 4 
 
-        MAX_COLORS = 23
+        self.categorical_size = 23
         self.color_embedding_size = dim_embedding//4
 
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.color_embedding = nn.Embedding(
-            num_embeddings=MAX_COLORS,
-            embedding_dim=self.color_embedding_size,
-            device=device
-            )
         
     
 
@@ -55,9 +50,10 @@ class Eternity(COProblem):
             new_states[i] = n_state
 
             if conflict == 0:
-                reward = 1
+                reward = 5
             else:
-                reward = -conflict
+                reward = 2-conflict
+
             rewards[i] = reward
 
         return new_states, rewards
@@ -183,3 +179,9 @@ class Eternity(COProblem):
         sol = [tuple(x) for x in sol][1:]
         seg = [tuple(x) for x in segments[:,[0,2,1,3]].int().tolist()]
         return self.pz.verify_solution(sol,seg)
+    
+    def get_conflicts(self,state,size):
+        sol = state[:size,[0,2,1,3]]
+        sol = sol.int().tolist()
+        sol = [tuple(x) for x in sol]
+        return self.pz.get_total_n_conflict(sol)

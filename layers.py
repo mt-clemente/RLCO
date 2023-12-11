@@ -89,14 +89,16 @@ class PositionalEncoding2D(nn.Module):
         :param tensor: A 4d tensor of size (batch_size, x, y, ch)
         :return: Positional Encoding Matrix of size (batch_size, x, y, ch)
         """
-        if len(tensor.shape) != 4:
+        if len(tensor.shape) != 3:
             raise RuntimeError("The input tensor has to be 4d!")
 
         if self.cached_penc is not None and self.cached_penc.shape == tensor.shape:
             return self.cached_penc
 
         self.cached_penc = None
-        batch_size, x, y, orig_ch = tensor.shape
+        batch_size, seq, orig_ch = tensor.shape
+        x = int(seq**0.5)
+        y = int(seq**0.5)
         pos_x = torch.arange(x, device=tensor.device).type(self.inv_freq.type())
         pos_y = torch.arange(y, device=tensor.device).type(self.inv_freq.type())
         sin_inp_x = torch.einsum("i,j->ij", pos_x, self.inv_freq)
@@ -110,7 +112,7 @@ class PositionalEncoding2D(nn.Module):
         emb[:, :, self.channels : 2 * self.channels] = emb_y
 
         self.cached_penc = emb[None, :, :, :orig_ch].repeat(tensor.shape[0], 1, 1, 1)
-        return self.cached_penc
+        return self.cached_penc.view(tensor.size())
     
 def get_emb(sin_inp):
     """
@@ -152,9 +154,9 @@ class MaskedStableSoftmax(nn.Module):
 
     def forward(self, logits,mask):
 
-        logits = logits - logits.max(dim=-1, keepdim=True).values
         # print(torch.logical_not(mask).count_nonzero(dim=-1))
         # print(torch.argmax(torch.softmax(logits - self.eps*mask,-1),-1))
         if 0 in torch.logical_not(mask).count_nonzero(-1):
             raise Exception("No playable tile")
+        logits = logits - logits.max(dim=-1, keepdim=True).values
         return torch.softmax(logits - self.eps*mask,-1) 

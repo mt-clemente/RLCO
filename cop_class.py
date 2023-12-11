@@ -93,27 +93,6 @@ class COProblem(ABC):
         raise NotImplementedError
 
 
-    
-
-    @abstractmethod
-    def tokenize(self,states:torch.Tensor,segments:torch.Tensor) -> torch.Tensor:
-        """
-        This method takes in the instance of the problem and outputs tokens
-        that can be processed by a transformer.
-
-        Returns the tokenized states and segments as sequences of tokens:
-        If you have a batch of states representing a 2D grid of shape [batch, h, w] you
-        want to return a tensor of shape [batch, h*w, dim_embed]
-
-        FIXME: desc
-        TODO: If the size of the embedding does not correspond to the dim of a pretrained model you want to use,
-        it is possible to use a conv1d with the correct number of channels trained like an autoencoder to 
-        adapt the size of embedddings
-        """
-    
-        raise NotImplementedError
-
-
 
     @abstractmethod
     def valid_action_mask(self,states:torch.Tensor,segments:torch.Tensor) -> torch.BoolTensor:

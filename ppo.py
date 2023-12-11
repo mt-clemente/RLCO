@@ -1,5 +1,6 @@
 from pathlib import Path
 from einops import rearrange
+from matplotlib import pyplot as plt
 import torch
 from datetime import datetime
 import torch
@@ -37,6 +38,7 @@ class PPOAgent(nn.Module):
         
         super().__init__()
 
+        self.update_counter = 0
         self.train_cfg:dict = cfg['training']
         self.pb = pb
         self.instances = instances
@@ -44,6 +46,9 @@ class PPOAgent(nn.Module):
         self.value_weight = cfg['network']['value_weight']
         self.policy_weight = cfg['network']['policy_weight']
         self.entropy_weight = cfg['network']['entropy_weight']
+        self.dim_embed = cfg['network']['dim_embed']
+        self.color_embedding_size = self.dim_embed//4
+        net_cfg = cfg['network']
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
@@ -57,18 +62,63 @@ class PPOAgent(nn.Module):
             self.grad_clip = False
 
         self.model = ActorCritic(
-            cfg=cfg['network'],
+            cfg=net_cfg,
             num_segments=max_num_segments,
-            init_state=init_state,
+            max_inst_size=max([i.size for i in instances]),
             device=self.device
+        )
+
+        
+        self.color_embedding = nn.Embedding(
+            num_embeddings=self.pb.categorical_size,
+            embedding_dim=self.color_embedding_size,
+            device=device
         )
 
         if not eval_model_dir is None:
             self.load_model(eval_model_dir,load_list)
 
+        if net_cfg['separate_value_training']:
+            act_opt_cfg = net_cfg['actor']['optimizer']
+            self.actor_optimizer = self.init_optimizer(self,opt_cfg=act_opt_cfg)
+            crt_opt_cfg = net_cfg['actor']['optimizer']
+            self.critic_optimizer = self.init_optimizer(self,opt_cfg=crt_opt_cfg)
+
+        else:
+            self.optimizer = self.init_optimizer(opt_cfg=net_cfg['optimizer'])
+
+    def init_optimizer(self,opt_cfg) -> torch.optim.Optimizer:
+
+        if 'type' in opt_cfg.keys():
+            match 'type':
+                case 'Adam':
+                    optimizer = torch.optim.Adam
+
+                case 'SGD':
+                    optimizer = torch.optim.SGD
+
+                case 'RMSProp':
+                    optimizer = torch.optim.RMSprop
+        
+        else:
+            optimizer = torch.optim.RMSprop
+
+        combined_params = list(self.model.parameters()) + list(self.color_embedding.parameters())
+
+        return optimizer(combined_params,**opt_cfg)
+
+
     def load_model(self,eval_model_dir:Path,load_list:list):
         raise NotImplementedError
 
+    def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
+        state_ = self.color_embedding(states.int())
+        segments_ = self.color_embedding(segments.int())
+
+        state_tokens = rearrange(state_, "b s t e -> b s (t e)")
+        segment_tokens = rearrange(segments_, "b s t e -> b s (t e)")
+
+        return state_tokens.to(self.device), segment_tokens.to(self.device)
 
     def get_policy(
             self,
@@ -77,7 +127,6 @@ class PPOAgent(nn.Module):
             timesteps,
             valid_action_mask,
             src_key_padding_masks,
-            tgt_mask
             ):
 
 
@@ -86,29 +135,24 @@ class PPOAgent(nn.Module):
             segment_tokens=segment_tokens,
             timesteps=timesteps,
             valid_action_mask=valid_action_mask,
-            src_key_padding_masks=torch.logical_not(src_key_padding_masks),#FIXME: remove not fix masks
-            tgt_mask=tgt_mask,
+            src_key_padding_masks=src_key_padding_masks,#FIXME: remove not fix masks
         )
 
         return policy
     
     def compute_gae_rtg(self,  buf:Buffer, gamma, gae_lambda,segments,src_key_padding_masks):
 
-        # if (self.cur) % self.horizon != 0:
-        #     raise BufferError("Calculating GAE at wrong time")
-        #     pass
-
         # FIXME: Timesteps
         # State dims are [instance,step,state,token]
         states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
+        # states = buf.state_buf.transpose(0,1) # --> [step, instance, state, token]
         timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1).transpose(0,1).unsqueeze(-1)
         rewards = buf.rew_buf
         finals = buf.final_buf
 
         value_steps = []
         for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
-            
-            embedded_state_step,embedded_segment_step = self.pb.tokenize(state_step,segments)
+            embedded_state_step,embedded_segment_step = self.tokenize(state_step,segments)
             src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
                 embedded_states=embedded_state_step,
                 embedded_segments=embedded_segment_step,
@@ -131,7 +175,6 @@ class PPOAgent(nn.Module):
 
 
         # FIXME: Check if there is a problem with the new shapes
-
         td_errors = rewards + gamma * next_values * (1 - finals) - values.detach()
         gae = 0
         advantages = torch.zeros_like(td_errors)
@@ -140,24 +183,20 @@ class PPOAgent(nn.Module):
             gae = td_errors[t] + gamma * gae_lambda * (1 - finals[t]) * gae
             advantages[t] = gae
 
-
         returns_to_go = torch.zeros_like(rewards)
-        return_to_go = next_values[-1]
-        returns_to_go[-1] = return_to_go
-        for t in reversed(range(len(rewards)-1)):
-            return_to_go = rewards[t] + gamma * (1 - finals[t]) * return_to_go
-            returns_to_go[t] = return_to_go 
-
-        advantages = advantages
-        returns_to_go = returns_to_go
+        return_to_go = next_values[:,-1] * (1-finals[:,-1])
+        returns_to_go[:,-1] = return_to_go
+        for t in reversed(range(rewards.size(-1)-1)):
+            return_to_go = rewards[:,t] + gamma * (1 - finals[:,t]) * return_to_go
+            returns_to_go[:,t] = return_to_go 
 
         return advantages, returns_to_go,values
 
     def rollout(self,env:Environment):
 
         (
-            _,
-            _,
+            states,
+            segments,
             action_masks,
             steps
 
@@ -165,23 +204,24 @@ class PPOAgent(nn.Module):
 
         t0 = datetime.now()
 
-        for _ in range(env.horizon):#FIXME: -1
-            
+        for _ in range(env.horizon):
+
             with torch.no_grad():
-                state_tokens, segment_tokens = env.get_tokens()
+
+                state_tokens, segment_tokens = self.tokenize(states,segments)
                 policy = self.get_policy(
                     state_tokens=state_tokens,
                     segment_tokens=segment_tokens,
                     timesteps=steps,
                     valid_action_mask=action_masks,
                     src_key_padding_masks=env.src_key_padding_masks, #FIXME: the masks should end up being all through
-                    tgt_mask=env.causal_mask #FIXME: better env gestion
                 )
             actions = torch.multinomial(policy,1).squeeze()
             probs = policy[torch.arange(policy.size(0)),actions]
             
 
-            states, _, rewards, done, action_masks, steps = env.step(actions)
+            new_states, _, rewards, done, new_action_masks, new_steps = env.step(actions)
+
             self.buf.push(
                 state=states,
                 policy=probs,
@@ -192,11 +232,35 @@ class PPOAgent(nn.Module):
                 final=done
             )
 
-        self.buf.horzion_timesteps = steps + 1 % env.instance_lengths
-        print(f"Rollout - step {env.curr_step} : {datetime.now()-t0}")
+            if True in done:
+                new_states, new_action_masks = env.reset(done) # Only reset where done is True
+
+            
+            action_masks = new_action_masks
+            states = new_states
+            steps = new_steps
+
+        self.buf.push_horizon(
+            state=states,
+            step=steps,
+        )
 
 
-    def update(self,manager:Environment):
+        print(env.curr_step)
+
+        if done[0]:
+            conflicts = []
+            for i in range(states.size(0)):
+                conflicts.append(self.pb.get_conflicts(self.buf.state_buf[i,self.buf.ptr-1],env.sizes[i]))
+            wandb.log({
+                "Mean worker conflicts":sum(conflicts)/len(conflicts),
+                })
+
+        print(f"Rollout {self.update_counter} - log total gathered {torch.log10(torch.tensor(env.curr_step*states.size(0))):.2f} : {datetime.now()-t0}")
+        self.update_counter += 1
+
+
+    def update(self,env:Environment):
         """
         Updates the ppo agent, using the trajectories in the memory buffer.
         For states, policy, rewards, advantages, and timesteps the data is in a 
@@ -213,8 +277,8 @@ class PPOAgent(nn.Module):
             buf=self.buf,
             gamma=self.train_cfg['gamma'],
             gae_lambda=self.train_cfg['gae_lambda'],
-            segments=manager.segments,
-            src_key_padding_masks=manager.src_key_padding_masks
+            segments=env.segments,
+            src_key_padding_masks=env.src_key_padding_masks
         )
 
         dataset = TensorDataset(
@@ -226,7 +290,7 @@ class PPOAgent(nn.Module):
             rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
-            torch.arange(manager.num_instances,device=manager.device).repeat_interleave(self.buf.act_buf.size(1))
+            torch.arange(env.num_instances,device=env.device).repeat_interleave(self.buf.act_buf.size(1))
         )
 
         loader = DataLoader(dataset, batch_size=self.train_cfg['minibatch_size'], shuffle=True, drop_last=False)
@@ -240,7 +304,7 @@ class PPOAgent(nn.Module):
                     batch_states,
                     batch_actions,
                     batch_values,
-                    batch_masks,
+                    batch_action_masks,
                     batch_old_policies,
                     batch_timesteps,
                     batch_advantages,
@@ -249,9 +313,7 @@ class PPOAgent(nn.Module):
                     
                 ) = batch
                 
-                # FIXME: self. wtf??
-             
-                embedded_states, embedded_segments = manager.pb.tokenize(batch_states,manager.segments[instance_ids])
+                embedded_states, embedded_segments = self.tokenize(batch_states,env.segments[instance_ids])
 
                 src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
                     embedded_states,
@@ -264,24 +326,25 @@ class PPOAgent(nn.Module):
                     tgt_inputs=tgt_inputs,
                     timesteps=batch_timesteps,
                     tgt_key_padding_mask=tgt_key_padding_mask,
-                    src_key_padding_mask=manager.src_key_padding_masks[instance_ids]
+                    src_key_padding_mask=env.src_key_padding_masks[instance_ids]
                 )
                 
                 batch_policy = self.model.actor.forward(
                     src_inputs=src_inputs,
                     tgt_inputs=tgt_inputs,
                     timesteps=batch_timesteps,
-                    src_key_padding_mask=manager.src_key_padding_masks[instance_ids],
+                    src_key_padding_mask=env.src_key_padding_masks[instance_ids],
                     tgt_key_padding_mask=tgt_key_padding_mask,
-                    valid_action_mask=batch_masks
+                    invalid_action_mask=batch_action_masks
 
                 )
 
                 batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                # batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                batch_returns_norm = batch_returns
 
                 # Calculate ratios and surrogates for PPO loss
-                action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1))
+                action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1)).squeeze()
                 ratio = action_probs / (batch_old_policies + 1e-5)
                 clipped_ratio = torch.clamp(ratio, 1 - self.train_cfg['clip_eps'], 1 + self.train_cfg['clip_eps'])
                 surrogate1 = ratio * batch_advantages.unsqueeze(1)
@@ -289,8 +352,10 @@ class PPOAgent(nn.Module):
                 policy_loss = -torch.min(surrogate1, surrogate2).mean() * self.policy_weight
                 # Calculate value function loss
                 value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns_norm) * self.value_weight
+                
                 # Calculate entropy bonus
-                entropy = -(batch_policy[batch_policy != 0] * torch.log(batch_policy[batch_policy != 0])).sum(-1).mean()
+                entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1).mean()
+
                 entropy_loss = -self.entropy_weight * entropy
                 # Compute total loss and update parameters
 
@@ -298,8 +363,8 @@ class PPOAgent(nn.Module):
                     pol_loss = policy_loss + entropy_loss
                     val_loss = value_loss
 
-                    self.model.actor_optimizer.zero_grad()
-                    self.model.critic_optimizer.zero_grad()
+                    self.actor_optimizer.zero_grad()
+                    self.critic_optimizer.zero_grad()
 
                     pol_loss.backward()
                     val_loss.backward()
@@ -307,17 +372,19 @@ class PPOAgent(nn.Module):
                     if self.grad_clip:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.grad_clip)
 
-                    self.model.actor_optimizer.step()
-                    self.model.critic_optimizer.step()
+                    self.actor_optimizer.step()
+                    self.critic_optimizer.step()
 
                 else:
                     
                     loss = policy_loss + value_loss + entropy_loss
-                    self.model.optimizer.zero_grad()
+                    self.optimizer.zero_grad()
                     loss.backward()
 
                     if self.grad_clip:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(),self.grad_clip)
+                    
+                    self.optimizer.step()
                   
                 if DEBUG:
                     print(f"---- EPOCH {k} ----")
@@ -340,14 +407,27 @@ class PPOAgent(nn.Module):
 
 
         print("Update : ",datetime.now()-t0)
+
+        with torch.no_grad():
+
+
+            entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1)
+
+            max_entropy = torch.log(torch.logical_not(batch_action_masks).sum(-1))
+            max_entropy = max_entropy[torch.logical_not(batch_action_masks).sum(-1) != 1]
+            entropy = entropy[torch.logical_not(batch_action_masks).sum(-1) != 1]
+            rel_entropy = entropy / max_entropy
+
         wandb.log({
             # "Current learning rate":self.scheduler.get_last_lr()[0],
             "Value loss":value_loss,
             "Entropy loss":entropy_loss,
             "Policy loss":policy_loss,
-            "Returns":returns.mean(),
+            "Relative Entropy":rel_entropy.mean(),
+            "Returns":returns.mean(0),
+            "Reward repartition":self.buf.rew_buf.mean(0),
             "Mean buffer reward":self.buf.rew_buf.mean(),
-            "Average horizon reward":self.buf.rew_buf.mean(),
+            "Advantage repartition":advantages.mean(0),
             "Value repartition":batch_values.squeeze(-1).detach(),
             # "Total KL div": (batch_old_policies * (torch.log(batch_old_policies + 1e-5) - torch.log(batch_policy + 1e-5))).sum(dim=-1).mean()
             })

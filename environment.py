@@ -82,23 +82,19 @@ class Environment():
         self.instance_num_segments = torch.tensor([x.num_segments for x in self.instances])
 
         self.src_key_padding_masks = self.init_masks()
-        self.masks = self.src_key_padding_masks.clone()
+        self.base_masks = torch.logical_not(self.src_key_padding_masks)
+        self.masks = self.base_masks.clone()
         self.causal_mask = torch.triu(torch.ones(self.max_inst_size, self.max_inst_size,device=self.device), diagonal=1)
 
-        self.reset()
+        self.best_sol = None
+        self.best_sol_eval = None
+        self.best_perf = None
 
         self.cfg = self.cfg
         self.episode = torch.zeros_like(self.sizes)
         self.curr_step = 0
         self.horizon = self.cfg['horizon']
 
-
-    def reset(self):
-
-        # Training mgt
-        self.best_sol = None
-        self.best_sol_eval = None
-        self.best_perf = None
 
         
     def stop_criterion(self):
@@ -129,7 +125,7 @@ class Environment():
     def init_masks(self):
         
         # pad to get all max length sequences
-        src_key_padding_mask = torch.arange(self.max_num_segments).expand((self.num_instances,-1)) < self.instance_num_segments.unsqueeze(-1)
+        src_key_padding_mask = torch.arange(self.max_num_segments).expand((self.num_instances,-1)) >= self.instance_num_segments.unsqueeze(-1)
         
         return src_key_padding_mask.to(self.device)
     
@@ -179,17 +175,25 @@ class Environment():
         # if self.pb.verify_solution(self.states[0],self.segments[0],self.sizes[0]):
             # print(self.curr_step)
         
-
-        self.states[dones] = self.init_states[dones]
-        self.masks[dones] = self.src_key_padding_masks[dones]
+        # self.states[dones] = self.init_states[dones]
+        # self.masks[dones] = self.base_masks[dones]
         action_masks = self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
 
         return self.states, self.segments, rewards, dones, action_masks, steps
 
 
 
+    def reset(self,dones=None):
 
+        if dones is None:
+            self.states = self.init_states
+            self.masks = self.base_masks
+        
+        else:
+            self.states[dones] = self.init_states[dones]
+            self.masks[dones] = self.base_masks[dones]
 
+        return self.states,self.pb.valid_action_mask_(self.states,self.segments,self.masks) 
 
 
 
