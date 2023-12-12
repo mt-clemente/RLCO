@@ -51,13 +51,14 @@ class Buffer():
 
     def reset(self):
         
-        self.state_buf = torch.zeros((self.num_instances,self.capacity,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit) -10000
+        self.state_buf = torch.zeros((self.num_instances,self.capacity,self.dim_token),device=self.device,dtype=self.unit) -10000
+        self.solution_buf = torch.zeros((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit) -10000
         if not self.init_state is None:
             self.state_buf[0] = self.init_state
         
         self.value_buf = torch.zeros((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.horzion_timesteps = torch.empty(self.num_instances,device=self.device,dtype=int)
-        self.horzion_states = torch.empty((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit)
+        self.horzion_states = torch.empty((self.num_instances,self.dim_token),device=self.device,dtype=self.unit)
         self.act_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.policy_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_num_segments),dtype=bool,device=self.device)

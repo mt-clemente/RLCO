@@ -15,15 +15,17 @@ class TSP(COProblem):
         self.states_size, self.actions_size = stops, stops
         self.token_size = 2
         self.reuse_segments = False
+        self.categorical_size = stops
+
 
     def load_instance(self, path: Path) -> COPInstance:
         torch.manual_seed(0)
         cities = torch.rand(self.N_STOPS, 2)*self.ENV_SIZE
         cities = torch.hstack((cities,torch.arange(cities.size(0)).unsqueeze(-1)))
         state = torch.zeros_like(cities)
-        state[0] = cities[0]
+        state = cities[0]
         cities = cities[1:]
-        return COPInstance(state,cities,self.N_STOPS,self.N_STOPS-1)
+        return COPInstance(state,cities,1,self.N_STOPS-1)
 
 
     
@@ -31,15 +33,15 @@ class TSP(COProblem):
 
         n_states = states.clone()
         idx = torch.arange(n_states.size(0),device = states.device)
-        n_states[idx,steps+1] = segments[idx]
-        rewards = -self.dist(n_states[idx,steps],n_states[idx,steps+1])
+        n_states = segments[idx]
+        rewards = -self.dist(n_states,states)
         return n_states, rewards
 
     def to_tokens(self, states, segments):
         return states,segments
     
     def dist(self,s1,s2):
-        return torch.sqrt(((s1 - s2)**2)).sum(-1)
+        return torch.sqrt(((s1[:,:2] - s2[:,:2])**2)).sum(-1)
     
     def reset(self):
         """Restart the environment for experience replay

@@ -47,7 +47,7 @@ class PPOAgent(nn.Module):
         self.policy_weight = cfg['network']['policy_weight']
         self.entropy_weight = cfg['network']['entropy_weight']
         self.dim_embed = cfg['network']['dim_embed']
-        self.cat_embedding_size = self.dim_embed//4
+        self.cat_embedding_size = self.dim_embed
         net_cfg = cfg['network']
 
         if device is None:
@@ -71,7 +71,7 @@ class PPOAgent(nn.Module):
         try:
             self.embedding = nn.Embedding(
                 num_embeddings=self.pb.categorical_size,
-                embedding_dim=self.cat_embedding_size,
+                embedding_dim=self.cat_embedding_size-2,
                 device=device
             )
             self.state_unit = torch.int
@@ -94,7 +94,7 @@ class PPOAgent(nn.Module):
             self.critic_optimizer = self.init_optimizer(self,opt_cfg=crt_opt_cfg)
 
         else:
-            self.optimizer = self.init_optimizer(opt_cfg=net_cfg['optimizer'])
+             self.optimizer = self.init_optimizer(opt_cfg=net_cfg['optimizer'])
 
     def init_optimizer(self,opt_cfg) -> torch.optim.Optimizer:
 
@@ -122,29 +122,31 @@ class PPOAgent(nn.Module):
 
     def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
         
-        state_embeddings = self.embedding(states.to(self.state_unit))
-        segments_embeddings = self.embedding(segments.to(self.state_unit))
+        state_embeddings = torch.cat((
+            states[:,:2],
+            self.embedding(states[:,2].int())
+        ),
+        -1)
+        segment_embeddings = torch.cat((
+            segments[:,:,:2],
+            self.embedding(segments[:,:,2].int())
+        ),
+        -1)
 
-        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segments_embeddings)
+        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segment_embeddings)
 
         return state_tokens.to(self.device), segment_tokens.to(self.device)
 
     def get_policy(
             self,
             state_tokens,
-            segment_tokens,
-            timesteps,
             valid_action_mask,
-            src_key_padding_masks,
             ):
 
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
-            segment_tokens=segment_tokens,
-            timesteps=timesteps,
             valid_action_mask=valid_action_mask,
-            src_key_padding_masks=src_key_padding_masks,#FIXME: remove not fix masks
         )
 
         return policy
@@ -162,18 +164,9 @@ class PPOAgent(nn.Module):
         value_steps = []
         for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
             embedded_state_step,embedded_segment_step = self.tokenize(state_step,segments)
-            src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
-                embedded_states=embedded_state_step,
-                embedded_segments=embedded_segment_step,
-                timesteps=timestep_step
-            )
 
             value_step = self.model.critic.forward(
-                src_inputs=src_inputs,
-                tgt_inputs=tgt_inputs,
-                timesteps=timestep_step,
-                src_key_padding_mask=src_key_padding_masks,
-                tgt_key_padding_mask=tgt_key_padding_mask,
+                embedded_state_step,
             )
 
             value_steps.append(value_step.squeeze())
@@ -219,18 +212,14 @@ class PPOAgent(nn.Module):
 
                 state_tokens, segment_tokens = self.tokenize(states,segments)
                 policy = self.get_policy(
-                    state_tokens=state_tokens,
-                    segment_tokens=segment_tokens,
-                    timesteps=steps,
+                    state_tokens=state_tokens.squeeze(),
                     valid_action_mask=action_masks,
-                    src_key_padding_masks=env.src_key_padding_masks, #FIXME: the masks should end up being all through
                 )
             actions = torch.multinomial(policy,1).squeeze()
             probs = policy[torch.arange(policy.size(0)),actions]
             
 
             new_states, _, rewards, done, new_action_masks, new_steps = env.step(actions)
-
             self.buf.push(
                 state=states,
                 policy=probs,
@@ -241,18 +230,6 @@ class PPOAgent(nn.Module):
                 final=done
             )
 
-            if done[0]:
-
-                cost = []
-                for i in range(states.size(0)):
-                    cost.append(self.pb.get_loss(new_states[i],sizes=env.sizes[i]))
-                
-                avg_cost = sum(cost)/len(cost)
-                wandb.log({
-                    "Mean worker loss":avg_cost,
-                    })
-                
-                print(avg_cost)
             
             if True in done:
                 new_states, new_action_masks = env.reset(done) # Only reset where done is True
@@ -297,13 +274,13 @@ class PPOAgent(nn.Module):
             src_key_padding_masks=env.src_key_padding_masks
         )
 
+
         dataset = TensorDataset(
-            rearrange(self.buf.state_buf,'i s p t -> (i s) p t'),
+            rearrange(self.buf.state_buf,'i s t -> (i s) t'),
             rearrange(self.buf.act_buf,'i s -> (i s)'),
             rearrange(values,'i s -> (i s)'),
             rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
             rearrange(self.buf.policy_buf,'i s -> (i s)'),
-            rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
             torch.arange(env.num_instances,device=env.device).repeat_interleave(self.buf.act_buf.size(1))
@@ -322,7 +299,6 @@ class PPOAgent(nn.Module):
                     batch_values,
                     batch_action_masks,
                     batch_old_policies,
-                    batch_timesteps,
                     batch_advantages,
                     batch_returns,
                     instance_ids
@@ -331,33 +307,19 @@ class PPOAgent(nn.Module):
                 
                 embedded_states, embedded_segments = self.tokenize(batch_states,env.segments[instance_ids])
 
-                src_inputs, tgt_inputs,  tgt_key_padding_mask = self.model.make_transformer_inputs(
-                    embedded_states,
-                    embedded_segments,
-                    batch_timesteps.unsqueeze(-1),
-                )
 
                 batch_values = self.model.critic(
-                    src_inputs=src_inputs,
-                    tgt_inputs=tgt_inputs,
-                    timesteps=batch_timesteps,
-                    tgt_key_padding_mask=tgt_key_padding_mask,
-                    src_key_padding_mask=env.src_key_padding_masks[instance_ids]
+                    embedded_states,
                 )
                 
                 batch_policy = self.model.actor.forward(
-                    src_inputs=src_inputs,
-                    tgt_inputs=tgt_inputs,
-                    timesteps=batch_timesteps,
-                    src_key_padding_mask=env.src_key_padding_masks[instance_ids],
-                    tgt_key_padding_mask=tgt_key_padding_mask,
+                    embedded_states,
                     invalid_action_mask=batch_action_masks
 
                 )
 
                 # batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                batch_returns_norm = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
-                # batch_returns_norm = batch_returns
+                # batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1)).squeeze()
@@ -367,7 +329,7 @@ class PPOAgent(nn.Module):
                 surrogate2 = clipped_ratio * batch_advantages.unsqueeze(1)
                 policy_loss = -torch.min(surrogate1, surrogate2).mean() * self.policy_weight
                 # Calculate value function loss
-                value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns_norm) * self.value_weight
+                value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns) * self.value_weight
                 
                 # Calculate entropy bonus
                 entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1).mean()

@@ -77,26 +77,12 @@ class ActorCritic(nn.Module):
 
 
 
-    def get_policy(self, state_tokens, segment_tokens, timesteps, valid_action_mask,src_key_padding_masks,tgt_mask=None):
+    def get_policy(self, state_tokens,  valid_action_mask):
 
-        timesteps = timesteps.unsqueeze(-1)
-        src_inputs, tgt_inputs, tgt_key_padding_mask = self.make_transformer_inputs( #FIXME: homogeneous output size 
-            embedded_states=state_tokens,
-            embedded_segments=segment_tokens,
-            timesteps=timesteps
-        )
-
-        if tgt_mask is None:
-            tgt_mask = self.causal_mask
 
         policy_pred = self.actor.forward(
-                src_inputs=src_inputs,
-                tgt_inputs=tgt_inputs,
-                timesteps=timesteps,
+                src_inputs=state_tokens,
                 invalid_action_mask=valid_action_mask,
-                src_key_padding_mask=src_key_padding_masks,
-                tgt_mask=tgt_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask
         )
 
         return policy_pred
@@ -119,19 +105,14 @@ class Actor(nn.Module):
         self.ptrnet = cfg['pointer']
         self.dim_embed=dim_embed
 
-        self.transformer =  Transformer(
-            d_model=self.dim_embed,
-            num_encoder_layers=cfg['n_encoder_layers'],
-            num_decoder_layers=cfg['n_decoder_layers'],
-            nhead=cfg['nhead'],
-            dim_feedforward=cfg['hidden_size'],
-            dropout=0,
-            activation=F.gelu,
-            batch_first=True,
-            norm_first=True,
-            return_mem=cfg['pointer'],
-            dtype=unit,
-            device=device,
+        self.mlp =  nn.Sequential(
+            nn.Linear(dim_embed,cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],dim_embed,device=device),
         )
     
 
@@ -151,40 +132,15 @@ class Actor(nn.Module):
 
 
     
-    def forward(self,src_inputs,tgt_inputs,timesteps,invalid_action_mask,tgt_mask=None,src_key_padding_mask=None,tgt_key_padding_mask=None):
+    def forward(self,src_inputs,invalid_action_mask):
         
-        batch_size = tgt_inputs.size(0)
+        #FIXME: mask
+        policy_token = self.mlp(
+            src_inputs
+        )
 
-        # autoregressive by default
-        if tgt_mask is None:
-            tgt_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device), diagonal=1)
-            tgt_mask = tgt_mask.bool()
-
-        if self.ptrnet:
-
-            tgt_tokens, mem_tokens = self.transformer(
-                src=src_inputs,
-                tgt=tgt_inputs,
-                tgt_mask=tgt_mask,
-                src_key_padding_mask=src_key_padding_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask
-            )
-
-            tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze(-1)].reshape(batch_size,self.dim_embed)
-            mem_tokens = mem_tokens.reshape(batch_size,self.num_segments,self.dim_embed)
-            policy_pred = self.policy_attn_head(mem_tokens,tgt_tokens,torch.logical_not(invalid_action_mask))
-        
-        else:
-            #FIXME: mask
-            policy_tokens = self.transformer(
-                src=src_inputs,
-                tgt=tgt_inputs,
-                tgt_mask=tgt_mask,
-                tgt_key_padding_mask=None
-            )
-
-            policy_logits = self.actor_head(policy_tokens[torch.arange(batch_size,device=policy_tokens.device),timesteps.squeeze()].reshape(batch_size,self.dim_embed))
-            policy_pred = self.policy_head(policy_logits,invalid_action_mask)
+        policy_logits = self.actor_head(policy_token)
+        policy_pred = self.policy_head(policy_logits,invalid_action_mask)
 
         return policy_pred
 
@@ -194,19 +150,16 @@ class Critic(nn.Module):
     def __init__(self, cfg, dim_embed, device, unit) -> None:
         super().__init__()
 
-        self.transformer =  nn.Transformer(
-            d_model=dim_embed,
-            num_encoder_layers=cfg['n_encoder_layers'],
-            num_decoder_layers=cfg['n_decoder_layers'],
-            dim_feedforward=cfg['hidden_size'],
-            nhead=cfg['nhead'],
-            dropout=0,
-            activation=F.gelu,
-            batch_first=True,
-            norm_first=True,
-            dtype=unit,
-            device=device,
+        self.mlp =  nn.Sequential(
+            nn.Linear(dim_embed,cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
+            nn.ReLU(),
+            nn.Linear(cfg['hidden_size'],dim_embed,device=device),
         )
+    
     
     
         self.critic_head = nn.Sequential(
@@ -218,25 +171,13 @@ class Critic(nn.Module):
 
 
 
-    def forward(self,src_inputs,tgt_inputs,timesteps,tgt_mask=None,src_key_padding_mask=None,tgt_key_padding_mask=None):
+    def forward(self,src_inputs):
         
-        batch_size = tgt_inputs.size(0)
-
-        if tgt_mask is None:
-            tgt_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device,dtype=bool), diagonal=1)
-            # Convert the mask to a boolean tensor with 'True' values below the diagonal and 'False' values on and above the diagonal
-            tgt_mask = tgt_mask.bool()
-
-        tgt_tokens = self.transformer(
-            src=src_inputs,
-            tgt=tgt_inputs,
-            tgt_mask=tgt_mask,
-            src_key_padding_mask=src_key_padding_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask
+        value_token = self.mlp(
+            src_inputs,
         )
 
-        tgt_tokens = tgt_tokens[torch.arange(batch_size,device=tgt_tokens.device),timesteps.squeeze()].reshape(batch_size,self.dim_embed)
-        value_pred = self.critic_head(tgt_tokens)
+        value_pred = self.critic_head(value_token)
 
         return value_pred
 

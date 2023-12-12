@@ -59,7 +59,7 @@ class Environment():
 
         if isinstance(self.instances[0].state,torch.Tensor) and isinstance(self.instances[0].segments,torch.Tensor):
 
-            self.states = torch.zeros((self.num_instances,self.max_inst_size,self.segment_size),device=device)
+            self.states = torch.zeros((self.num_instances,self.segment_size),device=device)
             self.segments = torch.zeros((self.num_instances,self.max_num_segments,self.segment_size),device=device)
 
             for i, instance in enumerate(self.instances):
@@ -67,7 +67,7 @@ class Environment():
                 state = instance.state
                 segments = instance.segments
 
-                self.states[i,:instance.size] = state
+                self.states[i] = state
                 self.segments[i,:len(instance.segments)] = segments
 
             self.dim_token = self.states.size(-1)
