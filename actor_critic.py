@@ -106,11 +106,8 @@ class Actor(nn.Module):
         self.dim_embed=dim_embed
 
         self.mlp =  nn.Sequential(
-            nn.Linear(dim_embed,cfg['hidden_size'],device=device),
             nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
-            nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
+            nn.Linear(2,cfg['hidden_size'],device=device),
             nn.ReLU(),
             nn.Linear(cfg['hidden_size'],dim_embed,device=device),
         )
@@ -127,6 +124,7 @@ class Actor(nn.Module):
             self.actor_head = nn.Sequential(
                 nn.GELU(),
                 nn.Linear(dim_embed,num_segments,device=device,dtype=unit),
+                nn.BatchNorm1d(num_segments,device=device)
             )
             self.policy_head = MaskedStableSoftmax()
 
@@ -134,7 +132,6 @@ class Actor(nn.Module):
     
     def forward(self,src_inputs,invalid_action_mask):
         
-        #FIXME: mask
         policy_token = self.mlp(
             src_inputs
         )
@@ -150,16 +147,19 @@ class Critic(nn.Module):
     def __init__(self, cfg, dim_embed, device, unit) -> None:
         super().__init__()
 
-        self.mlp =  nn.Sequential(
-            nn.Linear(dim_embed,cfg['hidden_size'],device=device),
-            nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
-            nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],cfg['hidden_size'],device=device),
-            nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],dim_embed,device=device),
+        self.transformer =  nn.Transformer(
+            d_model=dim_embed,
+            num_encoder_layers=cfg['n_encoder_layers'],
+            num_decoder_layers=cfg['n_decoder_layers'],
+            dim_feedforward=cfg['hidden_size'],
+            nhead=cfg['nhead'],
+            dropout=0,
+            activation=F.gelu,
+            batch_first=True,
+            norm_first=True,
+            dtype=unit,
+            device=device,
         )
-    
     
     
         self.critic_head = nn.Sequential(
@@ -171,16 +171,30 @@ class Critic(nn.Module):
 
 
 
-    def forward(self,src_inputs):
+    def forward(self,src_inputs,tgt_inputs,timesteps,tgt_mask=None,src_key_padding_mask=None):
         
-        value_token = self.mlp(
-            src_inputs,
+        batch_size = tgt_inputs.size(0)
+
+        if tgt_mask is None:
+            tgt_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device,dtype=bool), diagonal=1)
+            # Convert the mask to a boolean tensor with 'True' values below the diagonal and 'False' values on and above the diagonal
+            tgt_mask = tgt_mask.bool()
+
+
+        tgt_tokens = self.transformer(
+                src=src_inputs,
+                tgt=tgt_inputs,
+                tgt_mask=tgt_mask,
         )
 
-        value_pred = self.critic_head(value_token)
+        idx = torch.arange(batch_size,device=tgt_tokens.device)
+        if timesteps.dim() != 1:
+            idx.unsqueeze_(-1)
 
-        return value_pred
+        tgt_tokens = tgt_tokens[idx,timesteps.squeeze()+1]
 
+        value_pred = self.critic_head(tgt_tokens)
+        return value_pred.squeeze()
 
 # TODO: nn.Module?
 def init_scheduler(model:nn.Module,shc_cfg):

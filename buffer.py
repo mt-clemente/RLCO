@@ -18,6 +18,7 @@ class Buffer():
         self.max_ep_len = max_ep_len
         self.num_instances = num_instances
         self.reset()
+        self.reset_sol()
 
     def push(
             self,
@@ -31,6 +32,7 @@ class Buffer():
             ):
 
         self.state_buf[:,self.ptr] = state
+        self.solution_buf[:,self.sol_ptr] = state
         self.policy_buf[:,self.ptr] = policy
         self.mask_buf[:,self.ptr] = mask
         self.rew_buf[:,self.ptr] = reward
@@ -38,6 +40,7 @@ class Buffer():
         self.final_buf[:,self.ptr] = final
         self.act_buf[:,self.ptr] = action
         self.ptr += 1
+        self.sol_ptr += 1
 
 
     def push_horizon(
@@ -52,7 +55,6 @@ class Buffer():
     def reset(self):
         
         self.state_buf = torch.zeros((self.num_instances,self.capacity,self.dim_token),device=self.device,dtype=self.unit) -10000
-        self.solution_buf = torch.zeros((self.num_instances,self.max_ep_len,self.dim_token),device=self.device,dtype=self.unit) -10000
         if not self.init_state is None:
             self.state_buf[0] = self.init_state
         
@@ -66,3 +68,7 @@ class Buffer():
         self.final_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.timestep_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=int)
         self.ptr = 0
+
+    def reset_sol(self):
+        self.solution_buf = torch.zeros((self.num_instances,self.max_ep_len+1,self.dim_token),device=self.device,dtype=self.unit) -10000
+        self.sol_ptr = 0

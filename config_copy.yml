@@ -1,51 +1,54 @@
-cuda: False
+cuda: True
 log_every: 20
 # categorical_token_vocab_size: 23
 # dim_token: 4
+
+# -------------------- PROBLEM SETTINGS -------------------- 
+problem:
+  env_size: 10
+  stops: 50
 
 # -------------------- NETWORK SETTINGS -------------------- 
 
 network:
 
   unit: 'torch.half'
-  dim_embed: 20
+  dim_embed: 32
+  pos_encoding: 0
   separate_value_training: False
   categorical_vocab_size: 23
 
   actor:  
-    pointer: true
+    pointer: False
     hidden_size: 512
-    n_encoder_layers: 4
-    n_decoder_layers: 4
-    nhead: 5
-    optimizer:
-      lr: 1.0e-4
+    nhead: 1
 
   critic:  
     hidden_size: 512
-    n_encoder_layers: 4
-    n_decoder_layers: 4
-    nhead: 5
-    optimizer:
-      lr: 1.0e-4
+    nhead: 1
+
+  optimizer:
+    lr: 1.0e-4
   
-  value_weight: 0.5
+  value_weight: 0.3
   policy_weight: 1
-  entropy_weight: 0.08
+  entropy_weight: 0
 
 # --------------------  SETTINGS -------------------- 
 
 training:
 
-  gae_lambda: 0.9
-  epochs: 3
-  num_workers: 2
+  grad_clip: 0.5
+  gae_lambda: 0.5
+  epochs: 5
+  num_workers: 128
   checkpoint_period: 100
-  minibatch_size: 27
-  horizon: 10
-  opt_epsilon: 1.0e-4
-  gamma: 0.94
-  clip_eps: 0.16
+  minibatch_size: 256
+  horizon: 18
+  opt_epsilon: 1.0e-8
+  gamma: 0.75
+  # gamma: 1
+  clip_eps: 0.1
 
   stop_criterion:
     type: 'inf'

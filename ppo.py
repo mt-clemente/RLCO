@@ -1,5 +1,5 @@
 from pathlib import Path
-from einops import rearrange
+from einops import rearrange, repeat
 from matplotlib import pyplot as plt
 import torch
 from datetime import datetime
@@ -120,22 +120,26 @@ class PPOAgent(nn.Module):
     def load_model(self,eval_model_dir:Path,load_list:list):
         raise NotImplementedError
 
-    def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
+    def tokenize(self, states:torch.Tensor,segments:torch.Tensor,return_segments=False) -> tuple[torch.Tensor,torch.Tensor]:
         
-        state_embeddings = torch.cat((
-            states[:,:2],
-            self.embedding(states[:,2].int())
-        ),
-        -1)
-        segment_embeddings = torch.cat((
-            segments[:,:,:2],
-            self.embedding(segments[:,:,2].int())
-        ),
-        -1)
+        # # state_embeddings = torch.cat((
+        # #     states[:,:2],
+        # #     self.embedding(states[:,2].int())
+        # # ),
+        # # -1)
+        # # segment_embeddings = torch.cat((
+        # #     segments[:,:,:2],
+        # #     self.embedding(segments[:,:,2].int())
+        # # ),
+        # # -1)
 
-        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segment_embeddings)
+        # state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segment_embeddings)
 
-        return state_tokens.to(self.device), segment_tokens.to(self.device)
+        # return state_tokens.to(self.device), segment_tokens.to(self.device)
+        if return_segments:
+            return self.embedding(states[:,:,:2]), self.embedding(segments[:,:,:2])
+
+        return states[:,:2], None
 
     def get_policy(
             self,
@@ -153,27 +157,30 @@ class PPOAgent(nn.Module):
     
     def compute_gae_rtg(self,  buf:Buffer, gamma, gae_lambda,segments,src_key_padding_masks):
 
-        # FIXME: Timesteps
-        # State dims are [instance,step,state,token]
-        states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
-        # states = buf.state_buf.transpose(0,1) # --> [step, instance, state, token]
-        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1).transpose(0,1).unsqueeze(-1)
+        # # FIXME: Timesteps
+        # # State dims are [instance,step,state,token]
+        # states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
+        # # states = buf.state_buf.transpose(0,1) # --> [step, instance, state, token]
+        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1)
+
+        states = buf.solution_buf
         rewards = buf.rew_buf
         finals = buf.final_buf
+        masks = buf.mask_buf
 
-        value_steps = []
-        for i, (state_step, timestep_step) in enumerate(zip(states, timesteps)):
-            embedded_state_step,embedded_segment_step = self.tokenize(state_step,segments)
+        embedded_state_step,embedded_segment_step = self.tokenize(states,segments,return_segments=True)
 
-            value_step = self.model.critic.forward(
-                embedded_state_step,
-            )
+        value_preds = self.model.critic.forward(
+            src_inputs=embedded_segment_step,
+            tgt_inputs=embedded_state_step[:,:-1,:],
+            timesteps=timesteps,
+            src_key_padding_mask=masks
+        )
 
-            value_steps.append(value_step.squeeze())
 
-        values = torch.stack(value_steps, dim=1)
-        next_values = values[:,1:].detach()
-        values = values[:,:-1]
+        
+        next_values = value_preds[:,1:].detach()
+        values = value_preds[:,:-1]
 
 
         # FIXME: Check if there is a problem with the new shapes
@@ -191,6 +198,7 @@ class PPOAgent(nn.Module):
         for t in reversed(range(rewards.size(-1)-1)):
             return_to_go = rewards[:,t] + gamma * (1 - finals[:,t]) * return_to_go
             returns_to_go[:,t] = return_to_go 
+
 
         return advantages, returns_to_go,values
 
@@ -230,9 +238,26 @@ class PPOAgent(nn.Module):
                 final=done
             )
 
-            
             if True in done:
                 new_states, new_action_masks = env.reset(done) # Only reset where done is True
+                self.buf.solution_buf[:,-2] = new_states
+                self.buf.solution_buf[:,-1] = self.buf.solution_buf[:,0]
+                cost = self.pb.get_loss(self.buf.solution_buf)
+
+                wandb.log(
+                    {
+                        'Cost':cost.mean()
+                    }
+                )
+                if torch.randint(3000,(1,)) == 49:
+                    data = self.buf.solution_buf[0].cpu().detach().squeeze()
+                    plt.scatter(data[:,0],data[:,1])
+                    plt.plot(data[:,0],data[:,1])
+
+                    plt.savefig(f'figs/sol_{self.update_counter}')
+                    plt.clf()
+
+                self.buf.reset_sol()
 
             
             action_masks = new_action_masks
@@ -274,17 +299,18 @@ class PPOAgent(nn.Module):
             src_key_padding_masks=env.src_key_padding_masks
         )
 
-
         dataset = TensorDataset(
             rearrange(self.buf.state_buf,'i s t -> (i s) t'),
             rearrange(self.buf.act_buf,'i s -> (i s)'),
-            rearrange(values,'i s -> (i s)'),
             rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
             rearrange(self.buf.policy_buf,'i s -> (i s)'),
+            repeat(self.buf.solution_buf,'i l t -> (i s) l t',s=self.buf.state_buf.size(1)),
+            rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
             torch.arange(env.num_instances,device=env.device).repeat_interleave(self.buf.act_buf.size(1))
         )
+
 
         loader = DataLoader(dataset, batch_size=self.train_cfg['minibatch_size'], shuffle=True, drop_last=False)
 
@@ -296,30 +322,36 @@ class PPOAgent(nn.Module):
                 (
                     batch_states,
                     batch_actions,
-                    batch_values,
                     batch_action_masks,
                     batch_old_policies,
+                    batch_solutions,
+                    batch_timesteps,
                     batch_advantages,
                     batch_returns,
                     instance_ids
                     
                 ) = batch
-                
-                embedded_states, embedded_segments = self.tokenize(batch_states,env.segments[instance_ids])
 
+
+                embedded_states, embedded_segments = self.tokenize(batch_solutions,env.segments[instance_ids],return_segments=True)
 
                 batch_values = self.model.critic(
-                    embedded_states,
+                    tgt_inputs=embedded_states,
+                    src_inputs=embedded_segments,
+                    timesteps=batch_timesteps
                 )
-                
+
+                embedded_states, embedded_segments = self.tokenize(batch_states,env.segments[instance_ids])
                 batch_policy = self.model.actor.forward(
                     embedded_states,
                     invalid_action_mask=batch_action_masks
 
                 )
 
-                # batch_advantages = (batch_advantages - batch_advantages.mean()) / (batch_advantages.std()+1e-4)
-                # batch_returns = (batch_returns - batch_returns.mean()) / (batch_returns.std()+1e-4)
+                if self.train_cfg['norm_adv']:
+                    batch_advantages = (batch_advantages) / (batch_advantages.max()-batch_advantages.min())
+                if self.train_cfg['norm_ret']:
+                    batch_returns = (batch_returns) / (batch_returns.max()-batch_returns.min())
 
                 # Calculate ratios and surrogates for PPO loss
                 action_probs = batch_policy.gather(1, batch_actions.unsqueeze(1)).squeeze()

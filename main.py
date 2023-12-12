@@ -24,7 +24,7 @@ TODO:
  - Use partial solutions for transf?? Aka manage sequence length, is it useful? --> Not for now
 
 """
-torch.cuda.is_available = lambda : False
+# torch.cuda.is_available = lambda : False
 # torch.autograd.set_detect_anomaly(True)
 
 parser = argparse.ArgumentParser()
@@ -45,7 +45,7 @@ trainer = RLCOSolver(
 wandb.init(
     project='EteRLnity',
     entity='mateo-clemente',
-    group='NewTests',
+    group='TSP',
     config=trainer.cfg
 )
 
