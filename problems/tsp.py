@@ -15,6 +15,8 @@ class TSP(COProblem):
         self.states_size, self.actions_size = stops, stops
         self.token_size = 2
         self.reuse_segments = False
+        self.categorical_size = stops
+
 
     def load_instance(self, path: Path) -> COPInstance:
         torch.manual_seed(0)
@@ -39,7 +41,7 @@ class TSP(COProblem):
         return states,segments
     
     def dist(self,s1,s2):
-        return torch.sqrt(((s1 - s2)**2)).sum(-1)
+        return torch.sqrt(((s1[:,:2] - s2[:,:2])**2)).sum(-1)
     
     def reset(self):
         """Restart the environment for experience replay
@@ -60,7 +62,6 @@ class TSP(COProblem):
 
 
     def get_loss(self,states:torch.Tensor,**kwargs):
-
         shifted = states.roll(1,0)
         return self.dist(states,shifted).sum()
 

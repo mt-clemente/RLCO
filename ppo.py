@@ -47,7 +47,7 @@ class PPOAgent(nn.Module):
         self.policy_weight = cfg['network']['policy_weight']
         self.entropy_weight = cfg['network']['entropy_weight']
         self.dim_embed = cfg['network']['dim_embed']
-        self.cat_embedding_size = self.dim_embed//4
+        self.cat_embedding_size = self.dim_embed
         net_cfg = cfg['network']
 
         if device is None:
@@ -71,7 +71,7 @@ class PPOAgent(nn.Module):
         try:
             self.embedding = nn.Embedding(
                 num_embeddings=self.pb.categorical_size,
-                embedding_dim=self.cat_embedding_size,
+                embedding_dim=self.cat_embedding_size-2,
                 device=device
             )
             self.state_unit = torch.int
@@ -121,11 +121,19 @@ class PPOAgent(nn.Module):
         raise NotImplementedError
 
     def tokenize(self, states:torch.Tensor,segments:torch.Tensor) -> tuple[torch.Tensor,torch.Tensor]:
-        
-        state_embeddings = self.embedding(states.to(self.state_unit))
-        segments_embeddings = self.embedding(segments.to(self.state_unit))
 
-        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segments_embeddings)
+        state_embeddings = torch.cat((
+            states[:,:,:2],
+            self.embedding(states[:,:,2].int())
+        ),
+        -1)
+        segment_embeddings = torch.cat((
+            segments[:,:,:2],
+            self.embedding(segments[:,:,2].int())
+        ),
+        -1)
+
+        state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segment_embeddings)
 
         return state_tokens.to(self.device), segment_tokens.to(self.device)
 
