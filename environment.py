@@ -207,7 +207,7 @@ def load_config(path:Path):
     if cfg['network']['dim_embed'] % cfg['network']['critic']['nhead']:
         raise ValueError('The number of heads needs to be a divisor of the embedding dimension')
     
-    if not 'pointer' in cfg['network'].keys():
+    if not 'pointer' in cfg['network']['actor'].keys():
         cfg['network']['actor']['pointer'] = False
     
     match cfg['network']['unit']:

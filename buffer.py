@@ -49,8 +49,9 @@ class Buffer():
             step
             ):
         
-        self.horzion_states = state
+        self.solution_buf[:,self.ptr] = state
         self.horzion_timesteps = step
+        
 
     def reset(self):
         

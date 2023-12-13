@@ -77,6 +77,12 @@ class PPOAgent(nn.Module):
             self.state_unit = torch.int
 
         except AttributeError:
+            self.city_embedding = nn.Embedding(
+                num_embeddings=max_num_segments+1,
+                embedding_dim=self.dim_embed,
+                device=device
+            )
+            self.state_unit = torch.int
             self.embedding = nn.Linear(
                 in_features=self.pb.token_size,
                 out_features=self.dim_embed,
@@ -139,17 +145,19 @@ class PPOAgent(nn.Module):
         if return_segments:
             return self.embedding(states[:,:,:2]), self.embedding(segments[:,:,:2])
 
-        return states[:,:2], None
+        return self.embedding(states[:,:2]), self.embedding(segments[:,:,:2])
 
     def get_policy(
             self,
             state_tokens,
+            segment_tokens,
             valid_action_mask,
             ):
 
 
         policy = self.model.get_policy(
             state_tokens=state_tokens,
+            segment_tokens=segment_tokens,
             valid_action_mask=valid_action_mask,
         )
 
@@ -221,6 +229,7 @@ class PPOAgent(nn.Module):
                 state_tokens, segment_tokens = self.tokenize(states,segments)
                 policy = self.get_policy(
                     state_tokens=state_tokens.squeeze(),
+                    segment_tokens=segment_tokens,
                     valid_action_mask=action_masks,
                 )
             actions = torch.multinomial(policy,1).squeeze()
@@ -343,7 +352,8 @@ class PPOAgent(nn.Module):
 
                 embedded_states, embedded_segments = self.tokenize(batch_states,env.segments[instance_ids])
                 batch_policy = self.model.actor.forward(
-                    embedded_states,
+                    tgt_inputs=embedded_states,
+                    src_inputs=embedded_segments,
                     invalid_action_mask=batch_action_masks
 
                 )

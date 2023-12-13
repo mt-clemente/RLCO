@@ -77,11 +77,12 @@ class ActorCritic(nn.Module):
 
 
 
-    def get_policy(self, state_tokens,  valid_action_mask):
+    def get_policy(self, state_tokens,segment_tokens, valid_action_mask):
 
 
         policy_pred = self.actor.forward(
-                src_inputs=state_tokens,
+                tgt_inputs=state_tokens,
+                src_inputs=segment_tokens,
                 invalid_action_mask=valid_action_mask,
         )
 
@@ -101,15 +102,15 @@ class Actor(nn.Module):
     def __init__(self, cfg, dim_embed, num_segments, device, unit) -> None:
         super().__init__()
 
-        self.num_segments = num_segments        
+        self.num_segments = num_segments
         self.ptrnet = cfg['pointer']
         self.dim_embed=dim_embed
 
         self.mlp =  nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(2,cfg['hidden_size'],device=device),
-            nn.ReLU(),
-            nn.Linear(cfg['hidden_size'],dim_embed,device=device),
+            nn.Tanh(),
+            # nn.Linear(dim_embed,dim_embed,device=device),
+            # nn.Tanh(),
+            # nn.Linear(cfg['hidden_size'],dim_embed,device=device),
         )
     
 
@@ -122,21 +123,32 @@ class Actor(nn.Module):
 
         else:
             self.actor_head = nn.Sequential(
-                nn.GELU(),
+                nn.Tanh(),
                 nn.Linear(dim_embed,num_segments,device=device,dtype=unit),
                 nn.BatchNorm1d(num_segments,device=device)
             )
-            self.policy_head = MaskedStableSoftmax()
+
+        self.policy_head = MaskedStableSoftmax()
 
 
     
-    def forward(self,src_inputs,invalid_action_mask):
+    def forward(self,tgt_inputs,src_inputs,invalid_action_mask):
         
         policy_token = self.mlp(
-            src_inputs
+            tgt_inputs
         )
 
-        policy_logits = self.actor_head(policy_token)
+        if self.ptrnet:
+            
+            policy_logits = self.policy_attn_head(
+                memory=src_inputs,
+                target=policy_token,
+                memory_mask=invalid_action_mask
+            )
+
+        else:
+            policy_logits = self.actor_head(policy_token)
+
         policy_pred = self.policy_head(policy_logits,invalid_action_mask)
 
         return policy_pred
@@ -191,7 +203,7 @@ class Critic(nn.Module):
         if timesteps.dim() != 1:
             idx.unsqueeze_(-1)
 
-        tgt_tokens = tgt_tokens[idx,timesteps.squeeze()+1]
+        tgt_tokens = tgt_tokens[idx,timesteps.squeeze()]
 
         value_pred = self.critic_head(tgt_tokens)
         return value_pred.squeeze()

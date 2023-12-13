@@ -1,3 +1,4 @@
+from einops import einsum
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -155,17 +156,13 @@ class Pointer(nn.Module):
         super().__init__()
         self.d_model = d_model
 
-        self.Wq = nn.Linear(d_model,d_model, device=device, dtype=unit,bias=False)
-        self.Wk = nn.Linear(d_model,d_model, device=device, dtype=unit,bias=False)
-        self.v = nn.Linear(d_model, 1, device=device, dtype=unit,bias=False)
-
-        torch.nn.init.normal_(self.v.weight,0,0.01) #TODO: add paper stating 0.01 init is good
-
+        self.Wq = nn.Linear(d_model,d_model, device=device, dtype=unit)
+        self.Wk = nn.Linear(d_model,d_model, device=device, dtype=unit)
 
     def forward(self, memory:torch.Tensor, target:torch.Tensor, memory_mask:torch.BoolTensor):
-        q = self.Wq(target).unsqueeze(1)
+        q = self.Wq(target)
         k = self.Wk(memory)
-        out = self.v(torch.tanh(q + k)).squeeze(-1)
+        out = einsum(q,k,'b t, b s t -> b s').squeeze()
         probs = F.softmax(out - 1e9 * memory_mask,dim=-1)
         return probs
     

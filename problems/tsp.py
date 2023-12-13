@@ -67,6 +67,5 @@ class TSP(COProblem):
     def get_loss(self,states:torch.Tensor,**kwargs):
 
         shifted = states.roll(1,1)
-        print(states[:,:,:2].size())
         return self.dist(states,shifted)
 

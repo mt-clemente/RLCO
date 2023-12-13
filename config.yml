@@ -1,5 +1,5 @@
 cuda: True
-log_every: 20
+# log_every: 20
 # categorical_token_vocab_size: 23
 # dim_token: 4
 
@@ -13,13 +13,14 @@ problem:
 network:
 
   unit: 'torch.half'
-  dim_embed: 32
+  dim_embed: 8
   pos_encoding: 0
   separate_value_training: False
   categorical_vocab_size: 23
 
   actor:  
-    hidden_size: 64
+    hidden_size: 32
+    pointer: True
 
   critic:  
     hidden_size: 64
@@ -28,9 +29,9 @@ network:
     nhead: 1
 
   optimizer:
-    lr: 5.0e-5
+    lr: 1.0e-2
   
-  value_weight: 0.8
+  value_weight: 0.3
   policy_weight: 1
   entropy_weight: 0
 
@@ -44,14 +45,12 @@ training:
   num_workers: 32
   checkpoint_period: 100
   minibatch_size: 64
-  horizon: 5
-  opt_epsilon: 1.0e-8
+  horizon: 3
+  opt_epsilon: 1.0e-6
   gamma: 0.95
-  norm_adv: False
+  norm_adv: True
   norm_ret: False
-  # gamma: 1
-  clip_eps: 5
-
+  clip_eps: 0.9
   stop_criterion:
     type: 'inf'
 
