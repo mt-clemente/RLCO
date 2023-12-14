@@ -27,27 +27,27 @@ TODO:
 # torch.cuda.is_available = lambda : False
 # torch.autograd.set_detect_anomaly(True)
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')
-parser.add_argument('--files', dest='files',type=str,default='instances/eternity_B.txt')
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--cfg', dest='cfg',type=str,default='config.yml')
+# parser.add_argument('--files', dest='files',type=str,default='instances/eternity_B.txt')
 
-args = parser.parse_args()
+# args = parser.parse_args()
 
 problem = TSP
 
+wandb.init(
+    project='INF8250',
+    entity='mateo-clemente',
+    group='Sweep13_12'
+)
 
 trainer = RLCOSolver(
-    config_path=args.cfg,
-    instances_path=Path(args.files),
+    config_path='config.yml',
+    instances_path=Path('instances/eternity_B.txt'),
     problem=problem,
 )
 
-wandb.init(
-    project='EteRLnity',
-    entity='mateo-clemente',
-    group='TSP',
-    config=trainer.cfg
-)
+
 
 trainer.train()
 

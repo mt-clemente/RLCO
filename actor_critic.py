@@ -106,11 +106,13 @@ class Actor(nn.Module):
         self.ptrnet = cfg['pointer']
         self.dim_embed=dim_embed
 
+        layers = [nn.Tanh()]
+        for i in range(cfg['layers']):
+            layers.append(nn.LazyLinear(cfg['hidden_size'],device=device))
+            layers.append(nn.GELU())
+
         self.mlp =  nn.Sequential(
-            nn.Tanh(),
-            # nn.Linear(dim_embed,dim_embed,device=device),
-            # nn.Tanh(),
-            # nn.Linear(cfg['hidden_size'],dim_embed,device=device),
+            *layers
         )
     
 
@@ -123,9 +125,7 @@ class Actor(nn.Module):
 
         else:
             self.actor_head = nn.Sequential(
-                nn.Tanh(),
-                nn.Linear(dim_embed,num_segments,device=device,dtype=unit),
-                nn.BatchNorm1d(num_segments,device=device)
+                nn.LazyLinear(num_segments,device=device,dtype=unit),
             )
 
         self.policy_head = MaskedStableSoftmax()

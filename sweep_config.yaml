@@ -1,0 +1,90 @@
+program: train.py
+method: bayes
+metric:
+  goal: minimize
+  name: Cost
+early_terminate:
+  type: hyperband
+  min_iter: 1000
+  eta: 3
+parameters:
+  training.minibatch_size:
+    max: 128
+    min: 32
+    distribution: int_uniform
+  training.opt_epsilon:
+    max: 0.000002
+    min: 5e-7
+    distribution: uniform
+  training.num_workers:
+    max: 64
+    min: 16
+    distribution: int_uniform
+  training.gae_lambda:
+    max: 1
+    min: 0.0
+    distribution: uniform
+  training.grad_clip:
+    max: 10
+    min: 0.5
+    distribution: uniform
+  training.norm_ret:
+    values:
+      - "false"
+    distribution: categorical
+  training.norm_adv:
+    values:
+      - "true"
+    distribution: categorical
+  training.clip_eps:
+    max: 1
+    min: 0.1
+    distribution: uniform
+  training.horizon:
+    values: [1,3,5,18,49]
+  training.epochs:
+    max: 3
+    min: 1
+    distribution: int_uniform
+  training.gamma:
+    max: 1
+    min: 0
+    distribution: uniform
+  network.value_weight:
+    max: 0.6
+    min: 0.15
+  network.entropy_weight:
+    max: -2
+    min: -6
+    distribution: log_uniform
+  network.optimizer.lr:
+    max: -2
+    min: -6
+    distribution: log_uniform
+  network.dim_embed:
+    distribution: q_uniform
+    min: 8  # Set the minimum value
+    max: 128 # Set the maximum value
+    q: 4     # Step size, ensuring the value is a multiple of 4
+  network.critic.n_encoder_layers:
+    max: 4
+    min: 1
+    distribution: int_uniform
+  network.critic.n_decoder_layers:
+    max: 2
+    min: 1
+    distribution: int_uniform
+  network.critic.hidden_size:
+    max: 128
+    min: 32
+    distribution: int_uniform
+  network.critic.nhead:
+    values: [1,2,4]
+  network.actor.hidden_size:
+    max: 512
+    min: 8
+    distribution: int_uniform
+  network.actor.layers:
+    max: 4
+    min: 0
+    distribution: int_uniform

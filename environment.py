@@ -1,6 +1,7 @@
 import copy
 from pathlib import Path
 import torch
+import wandb
 import yaml
 from cop_class import COProblem
 import torch.nn.functional as F
@@ -203,6 +204,8 @@ def load_config(path:Path):
     
     with open(path, 'r') as yaml_file:
         cfg = yaml.safe_load(yaml_file)
+    
+    cfg = deep_update(cfg,parse_wandb_config(wandb.config))
 
     if cfg['network']['dim_embed'] % cfg['network']['critic']['nhead']:
         raise ValueError('The number of heads needs to be a divisor of the embedding dimension')
@@ -232,3 +235,47 @@ def load_config(path:Path):
 
     return cfg
 
+
+
+def parse_wandb_config(cfg:dict):
+
+    parsed_cfg=dict()
+
+    for key,value in cfg.items():
+        keys = key.split('.')
+
+        if len(keys) == 1:
+            parsed_cfg[key] = value
+
+        elif len(keys) == 2:
+            try:
+                parsed_cfg[keys[0].strip()][keys[1].strip()] = value
+            except:
+                parsed_cfg[keys[0].strip()] = {keys[1].strip():value}
+
+            
+        elif len(keys) == 3:
+            try:
+                parsed_cfg[keys[0].strip()][keys[1].strip()][keys[2].strip()] = value
+            except:
+                try:
+                    parsed_cfg[keys[0].strip()][keys[1].strip()] = {keys[2].strip():value}
+                except:
+                    parsed_cfg[keys[0].strip()] = {keys[1].strip() : {keys[2].strip():value}}
+
+    print(parsed_cfg)
+
+    return parsed_cfg
+
+def deep_update(source, overrides):
+    """
+    Update a nested dictionary or similar mapping.
+    Modify 'source' in place.
+    """
+    for key, value in overrides.items():
+        if isinstance(value, dict) and value:
+            returned = deep_update(source.get(key, {}), value)
+            source[key] = returned
+        else:
+            source[key] = overrides[key]
+    return source
