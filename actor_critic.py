@@ -65,26 +65,6 @@ class ActorCritic(nn.Module):
         self.causal_mask = torch.triu(torch.ones(max_inst_size, max_inst_size,device=self.device,dtype=bool), diagonal=1)
 
 
-
-    def make_transformer_inputs(self,embedded_states,embedded_segments, timesteps):
-
-        
-        batch_size = embedded_states.shape[0]
-
-        # FIXME: add positional encoding
-
-        src_inputs = self.embed_segment_ln(embedded_segments)
-        print(self.positional_encoding(embedded_states).size())
-        raise OSError   
-        plt.plot(self.positional_encoding(embedded_states)[0])
-        plt.show()
-        embedded_states += self.positional_encoding(embedded_states)
-        tgt_inputs = self.embed_state_ln(embedded_states)
-        tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps
-        return src_inputs, tgt_inputs, tgt_key_padding_mask.to(self.device)
-
-
-
     def get_policy(self, state_tokens,segment_tokens, valid_action_mask):
 
 
@@ -198,27 +178,38 @@ class Critic(nn.Module):
         # FIXME: 0 at the end of timesteps???
         batch_size = src_inputs.size(0)
 
-        src_inputs += self.pos_encoding(src_inputs)
+        # src_inputs += self.pos_encoding(src_inputs)
 
         if timesteps.dim() == 1:
             timesteps = timesteps.unsqueeze(-1)
 
         value_pred = torch.empty_like(timesteps,dtype=src_inputs.dtype)
 
-        for i in range(timesteps.size(-1)):
+        if src_inputs.dim() == 4:
+            for i in range(timesteps.size(-1)):
+                
+                step_inputs = src_inputs[:,i]
+                src_key_padding_mask = torch.arange(step_inputs.size(1),device=timesteps.device).expand(batch_size,-1) > timesteps[:,i].unsqueeze(-1)
 
-            src_key_padding_mask = torch.arange(src_inputs.size(1),device=timesteps.device).expand(batch_size,-1) > timesteps[:,i].unsqueeze(-1)
+                tokens = self.transformer(
+                        src=step_inputs,
+                        src_key_padding_mask=src_key_padding_mask
+                )
 
-            tokens = self.transformer(
-                    src=src_inputs,
-                    src_key_padding_mask=src_key_padding_mask
-            )
+                tokens = tokens[:,0] # TODO: add pooling + concat ===> feed into head
+                value_pred[:,i] = self.critic_head(tokens).squeeze()
 
-            idx = torch.arange(batch_size,device=tokens.device)
-            tokens = tokens[:,0] # TODO: add pooling + concat ===> feed into head
-            value_pred[:,i] = self.critic_head(tokens).squeeze()
+        else:
+                src_key_padding_mask = torch.arange(src_inputs.size(1),device=timesteps.device) > timesteps
+                tokens = self.transformer(
+                        src=src_inputs,
+                        src_key_padding_mask=src_key_padding_mask
+                )
 
-        # value_pred = self.critic_head(tokens)
+                tokens = tokens[:,0] # TODO: add pooling + concat ===> feed into head
+                value_pred = self.critic_head(tokens).squeeze()
+
+
         return value_pred.squeeze()
 
 # TODO: nn.Module?

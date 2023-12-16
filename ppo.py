@@ -134,7 +134,7 @@ class PPOAgent(nn.Module):
     def load_model(self,eval_model_dir:Path,load_list:list):
         raise NotImplementedError
 
-    def tokenize(self, states:torch.Tensor,segments:torch.Tensor,return_segments=False) -> tuple[torch.Tensor,torch.Tensor]:
+    def tokenize(self, states:torch.Tensor,segments:torch.Tensor=None,return_segments=False) -> tuple[torch.Tensor,torch.Tensor]:
         
         # # state_embeddings = torch.cat((
         # #     states[:,:2],
@@ -150,10 +150,10 @@ class PPOAgent(nn.Module):
         # state_tokens,segment_tokens = self.pb.to_tokens(state_embeddings,segment_embeddings)
 
         # return state_tokens.to(self.device), segment_tokens.to(self.device)
-        if return_segments:
-            return self.embedding(states[:,:,:2]), self.embedding(segments[:,:,:2])
-
-        return self.embedding(states[:,:2]), self.embedding(segments[:,:,:2])
+        if states.dim() == 4:
+            return self.embedding(states.narrow(-1,0,2))
+        
+        return self.embedding(states.narrow(-1,0,2)), self.embedding(segments.narrow(-1,0,2))
 
     def get_policy(
             self,
@@ -177,17 +177,18 @@ class PPOAgent(nn.Module):
         # # State dims are [instance,step,state,token]
         # states = torch.cat((buf.state_buf,buf.horzion_states.unsqueeze(1)),dim=1).transpose(0,1) # --> [step, instance, state, token]
         # # states = buf.state_buf.transpose(0,1) # --> [step, instance, state, token]
-        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1)
 
-        states = buf.solution_buf
+        timesteps = torch.cat((buf.timestep_buf,buf.horzion_timesteps.unsqueeze(1).to(self.device)),dim=1)
         rewards = buf.rew_buf
         finals = buf.final_buf
-        masks = buf.mask_buf
+        switches = torch.nn.functional.pad(buf.sol_switch_buf,(0,1,0,0),'constant',buf.horizon_switch)
+        states = buf.solution_buf.transpose(0,1)
+        states = states[torch.arange(states.size(0)).unsqueeze(-1),switches,:]
 
-        embedded_state_step,embedded_segment_step = self.tokenize(states,segments,return_segments=True)
+        embedded_states = self.tokenize(states)
 
         value_preds = self.model.critic.forward(
-            src_inputs=embedded_state_step[:,:-1,:],
+            src_inputs=embedded_states,
             timesteps=timesteps,
         )
 
@@ -252,16 +253,15 @@ class PPOAgent(nn.Module):
             )
 
             if True in done:
-                self.buf.solution_buf[:,-2] = new_states
-                self.buf.solution_buf[:,-1] = self.buf.solution_buf[:,0]
-                cost = self.pb.get_loss(self.buf.solution_buf)
+                self.buf.solution_buf[self.buf.sol_switch,:,-2] = new_states
+                self.buf.solution_buf[self.buf.sol_switch,:,-1] = self.buf.solution_buf[self.buf.sol_switch,:,0]
+                cost = self.pb.get_loss(self.buf.solution_buf[self.buf.sol_switch])
 
-                ids = self.buf.solution_buf[:,:,2]
+                ids = self.buf.solution_buf[self.buf.sol_switch,:,:,2]
 
                 wandb.log(
                     {
                         'Cost':cost.mean(),
-                        'Rank Repartition':calculate_mean_rank(ids.int().cpu())
                     }
                 )
 
@@ -275,6 +275,9 @@ class PPOAgent(nn.Module):
                     plt.clf()
 
                 new_states, new_action_masks = env.reset(done) # Only reset where done is True
+                self.buf.sol_switch ^= 1
+                self.buf.sol_ptr = 0
+
                 
 
             
@@ -282,7 +285,7 @@ class PPOAgent(nn.Module):
             states = new_states
             steps = new_steps
 
-                
+        
         self.buf.push_horizon(
             state=states,
             step=steps,
@@ -312,12 +315,17 @@ class PPOAgent(nn.Module):
             src_key_padding_masks=env.src_key_padding_masks
         )
 
+        switches = self.buf.sol_switch_buf
+        full_solutions = self.buf.solution_buf
+        full_solutions = self.buf.solution_buf.transpose(0,1)
+        full_solutions = full_solutions[torch.arange(full_solutions.size(0)).unsqueeze(-1),switches,:]
+
         dataset = TensorDataset(
             rearrange(self.buf.state_buf,'i s t -> (i s) t'),
             rearrange(self.buf.act_buf,'i s -> (i s)'),
             rearrange(self.buf.mask_buf,'i s m -> (i s) m'),
             rearrange(self.buf.policy_buf,'i s -> (i s)'),
-            repeat(self.buf.solution_buf,'i l t -> (i s) l t',s=self.buf.state_buf.size(1)),
+            rearrange(full_solutions,'i s l t -> (i s) l t'),
             rearrange(self.buf.timestep_buf,'i s -> (i s)'),
             rearrange(advantages,'i s -> (i s)'),
             rearrange(returns,'i s -> (i s)'),
@@ -346,6 +354,7 @@ class PPOAgent(nn.Module):
                 ) = batch
 
 
+                
                 embedded_states, embedded_segments = self.tokenize(batch_solutions,env.segments[instance_ids],return_segments=True)
 
                 batch_values = self.model.critic(

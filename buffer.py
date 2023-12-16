@@ -17,6 +17,11 @@ class Buffer():
         self.init_state = init_state
         self.max_ep_len = max_ep_len
         self.num_instances = num_instances
+
+        self.solution_buf = torch.zeros((2,self.num_instances,self.max_ep_len+1,self.dim_token),device=self.device,dtype=self.unit) -10000
+        self.sol_switch = 0 # When an horizon overlaps two episodes
+        self.sol_ptr = 0
+
         self.reset()
         self.reset_sol()
 
@@ -32,13 +37,14 @@ class Buffer():
             ):
 
         self.state_buf[:,self.ptr] = state
-        self.solution_buf[:,self.sol_ptr] = state
+        self.solution_buf[self.sol_switch,:,self.sol_ptr] = state
         self.policy_buf[:,self.ptr] = policy
         self.mask_buf[:,self.ptr] = mask
         self.rew_buf[:,self.ptr] = reward
         self.timestep_buf[:,self.ptr] = ep_step
         self.final_buf[:,self.ptr] = final
         self.act_buf[:,self.ptr] = action
+        self.sol_switch_buf[:,self.ptr] = self.sol_switch
         self.ptr += 1
         self.sol_ptr += 1
 
@@ -49,7 +55,8 @@ class Buffer():
             step
             ):
         
-        self.solution_buf[:,self.ptr] = state
+        self.solution_buf[self.sol_switch,:,self.sol_ptr] = state
+        self.horizon_switch = self.sol_switch
         self.horzion_timesteps = step
         
 
@@ -63,6 +70,7 @@ class Buffer():
         self.horzion_timesteps = torch.empty(self.num_instances,device=self.device,dtype=int)
         self.horzion_states = torch.empty((self.num_instances,self.dim_token),device=self.device,dtype=self.unit)
         self.act_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
+        self.sol_switch_buf = torch.empty((self.num_instances,self.capacity),dtype=int,device=self.device)
         self.policy_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
         self.mask_buf = torch.empty((self.num_instances,self.capacity,self.max_num_segments),dtype=bool,device=self.device)
         self.rew_buf = torch.empty((self.num_instances,self.capacity),device=self.device,dtype=self.unit)
@@ -71,5 +79,4 @@ class Buffer():
         self.ptr = 0
 
     def reset_sol(self):
-        self.solution_buf = torch.zeros((self.num_instances,self.max_ep_len+1,self.dim_token),device=self.device,dtype=self.unit) -10000
-        self.sol_ptr = 0
+        self.solution_buf[self.sol_switch^1] = 0
