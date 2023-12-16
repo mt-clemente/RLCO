@@ -1,40 +1,18 @@
+import torch
 
+def calculate_mean_rank(tensor):
+    id_counts = torch.zeros(50)
+    id_index_sum = torch.zeros(50)
 
-def parse_wandb_config(cfg:dict):
+    for row in tensor:
+        for index, id_ in enumerate(row):
+            id_counts[id_] += 1
+            id_index_sum[id_] += index
 
-    parsed_cfg=dict()
+    mean_ranks = id_index_sum / id_counts
+    return mean_ranks
 
-    for key,value in cfg.items():
-        keys = key.split('.')
-
-        if len(keys) == 1:
-            parsed_cfg[key] = value
-
-        elif len(keys) == 2:
-            try:
-                parsed_cfg[keys[0].strip()][keys[1].strip()] = value
-            except:
-                parsed_cfg[keys[0].strip()] = {keys[1].strip():value}
-
-            
-        elif len(keys) == 3:
-            try:
-                parsed_cfg[keys[0].strip()][keys[1].strip()][keys[2].strip()] = value
-            except:
-                try:
-                    parsed_cfg[keys[0].strip()][keys[1].strip()] = {keys[2].strip():value}
-                except:
-                    parsed_cfg[keys[0].strip()] = {keys[1].strip() : {keys[2].strip():value}}
-
-    return parsed_cfg
-
-print(parse_wandb_config(
-    {
-        'a':5,
-        'network.pointer':5,
-        'network.actor.size':5,
-        'network.critic.yoyo':5,
-        'training.critic.yoyo':5,
-        'training.critic.yoyo':5,
-    }
-))
+# Example usage
+tensor = torch.randint(0, 50, (32, 50))  # Example tensor with 32 rows, each a permutation of IDs 0-49
+mean_ranks = calculate_mean_rank(tensor)
+print(mean_ranks)

@@ -156,14 +156,16 @@ class Pointer(nn.Module):
         super().__init__()
         self.d_model = d_model
 
-        self.Wq = nn.Linear(d_model,d_model, device=device, dtype=unit)
+        self.Wq = nn.LazyLinear(d_model, device=device, dtype=unit)
         self.Wk = nn.Linear(d_model,d_model, device=device, dtype=unit)
 
     def forward(self, memory:torch.Tensor, target:torch.Tensor, memory_mask:torch.BoolTensor):
         q = self.Wq(target)
         k = self.Wk(memory)
-        out = einsum(q,k,'b t, b s t -> b s').squeeze()
+        out = ((q.unsqueeze(1) - k)**2).sum(dim=-1).squeeze()
+        # out = einsum(q,k,'b t, b s t -> b s').squeeze()
         probs = F.softmax(out - 1e9 * memory_mask,dim=-1)
+        
         return probs
     
 

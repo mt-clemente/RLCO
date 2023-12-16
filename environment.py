@@ -91,7 +91,7 @@ class Environment():
         self.best_perf = None
 
         self.cfg = self.cfg
-        self.episode = torch.zeros_like(self.sizes)
+        self.episode = 0
         self.curr_step = 0
         self.horizon = self.cfg['horizon']
 
@@ -107,7 +107,7 @@ class Environment():
                 return True
             
             case 'ep':
-                return self.episode > stop_cfg['n_ep']
+                return self.episode < stop_cfg['n_ep']
             
 
 
@@ -184,7 +184,7 @@ class Environment():
 
 
     def reset(self,dones=None):
-
+        self.episode += 1
         if dones is None:
             self.states = self.init_states
             self.masks = self.base_masks
@@ -204,8 +204,13 @@ def load_config(path:Path):
     
     with open(path, 'r') as yaml_file:
         cfg = yaml.safe_load(yaml_file)
-    
-    cfg = deep_update(cfg,parse_wandb_config(wandb.config))
+
+    try:
+        if len(wandb.config.keys()) != 0:
+            cfg = deep_update(cfg,parse_wandb_config(wandb.config))
+
+    except:
+        pass
 
     if cfg['network']['dim_embed'] % cfg['network']['critic']['nhead']:
         raise ValueError('The number of heads needs to be a divisor of the embedding dimension')

@@ -13,45 +13,46 @@ problem:
 network:
 
   unit: 'torch.half'
-  dim_embed: 32
-  pos_encoding: 0
+  dim_embed: 128
+  pos_encoding: 1
   separate_value_training: False
   categorical_vocab_size: 23
 
   actor:  
     hidden_size: 64
     pointer: False
-    layers: 1
+    layers: 0
 
   critic:  
     hidden_size: 64
-    n_encoder_layers: 1
-    n_decoder_layers: 1
+    n_encoder_layers: 2
     nhead: 4
 
   optimizer:
-    lr: 7.0e-3
+    type: 'AdamW'
+    lr: 1.0e-2
   
   value_weight: 0.3
   policy_weight: 1
-  entropy_weight: 0.0
+  entropy_weight: 0.005 # 0.01 too big  .0001 too small
 
 # --------------------  SETTINGS -------------------- 
 
 training:
 
   grad_clip: 1
-  gae_lambda: 0.99
+  gae_lambda: 0
   epochs: 1
-  num_workers: 32
+  num_workers: 16
   checkpoint_period: 100
   minibatch_size: 256
   horizon: 49
   opt_epsilon: 1.0e-6
-  gamma: 0.5
+  gamma: 0.95
   norm_adv: True
   norm_ret: False
   clip_eps: 0.5
   stop_criterion:
     type: 'inf'
+    n_ep: 3000
 

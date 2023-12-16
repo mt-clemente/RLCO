@@ -35,16 +35,17 @@ TODO:
 
 problem = TSP
 
-wandb.init(
-    project='INF8250',
-    entity='mateo-clemente',
-    group='Sweep13_12'
-)
-
 trainer = RLCOSolver(
     config_path='config.yml',
     instances_path=Path('instances/eternity_B.txt'),
     problem=problem,
+)
+
+wandb.init(
+    project='INF8250',
+    entity='mateo-clemente',
+    group='Sweep14_12',
+    config=trainer.cfg
 )
 
 

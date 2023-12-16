@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,14 +33,6 @@ class ActorCritic(nn.Module):
 
         crt_cfg = cfg['critic']
 
-        self.critic = Critic(
-            cfg=crt_cfg,
-            dim_embed=cfg['dim_embed'],
-            device=device,
-            unit=cfg['unit']
-        )
-
-
         self.dim_embed = cfg['dim_embed'] 
 
         if 'categorical_vocab_size' in cfg.keys():
@@ -47,11 +40,22 @@ class ActorCritic(nn.Module):
             self.embed_segment = nn.Embedding(cfg['categorical_vocab_size'],self.dim_embed)
 
         if cfg['pos_encoding'] == 1:
-            self.positional_encoding = PositionalEncoding2D(cfg['dim_embed']) # FIXME: choose type
-        elif cfg['pos_encoding'] == 2:
             self.positional_encoding = PositionalEncoding1D(cfg['dim_embed']) # FIXME: choose type
+        elif cfg['pos_encoding'] == 2:
+            self.positional_encoding = PositionalEncoding2D(cfg['dim_embed']) # FIXME: choose type
         else:
             self.positional_encoding = lambda x:0
+
+
+        self.critic = Critic(
+            cfg=crt_cfg,
+            positional_encoding=self.positional_encoding,
+            dim_embed=cfg['dim_embed'],
+            device=device,
+            unit=cfg['unit']
+        )
+
+
 
             
         self.embed_state_ln = nn.LayerNorm(self.dim_embed,eps=1e-5,device=device,dtype=cfg['unit'])
@@ -70,6 +74,10 @@ class ActorCritic(nn.Module):
         # FIXME: add positional encoding
 
         src_inputs = self.embed_segment_ln(embedded_segments)
+        print(self.positional_encoding(embedded_states).size())
+        raise OSError   
+        plt.plot(self.positional_encoding(embedded_states)[0])
+        plt.show()
         embedded_states += self.positional_encoding(embedded_states)
         tgt_inputs = self.embed_state_ln(embedded_states)
         tgt_key_padding_mask = torch.arange(self.num_segments+1,device=timesteps.device).repeat(batch_size,1) > timesteps
@@ -156,22 +164,25 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
 
-    def __init__(self, cfg, dim_embed, device, unit) -> None:
+    def __init__(self, cfg, dim_embed,positional_encoding, device, unit) -> None:
         super().__init__()
 
-        self.transformer =  nn.Transformer(
-            d_model=dim_embed,
-            num_encoder_layers=cfg['n_encoder_layers'],
-            num_decoder_layers=cfg['n_decoder_layers'],
-            dim_feedforward=cfg['hidden_size'],
-            nhead=cfg['nhead'],
-            dropout=0,
-            activation=F.gelu,
-            batch_first=True,
-            norm_first=True,
-            dtype=unit,
-            device=device,
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=dim_embed,
+                nhead=cfg['nhead'],
+                dim_feedforward=cfg['hidden_size'],
+                dropout=0,
+                activation=F.gelu,
+                batch_first=True,
+                norm_first=True,
+                dtype=unit,
+                device=device
+            ),
+            num_layers=cfg['n_encoder_layers']
         )
+
+        self.pos_encoding = positional_encoding
     
     
         self.critic_head = nn.Sequential(
@@ -183,29 +194,31 @@ class Critic(nn.Module):
 
 
 
-    def forward(self,src_inputs,tgt_inputs,timesteps,tgt_mask=None,src_key_padding_mask=None):
-        
-        batch_size = tgt_inputs.size(0)
+    def forward(self,src_inputs,timesteps,src_key_padding_mask=None):
+        # FIXME: 0 at the end of timesteps???
+        batch_size = src_inputs.size(0)
 
-        if tgt_mask is None:
-            tgt_mask = torch.triu(torch.ones(tgt_inputs.size()[1], tgt_inputs.size()[1],device=tgt_inputs.device,dtype=bool), diagonal=1)
-            # Convert the mask to a boolean tensor with 'True' values below the diagonal and 'False' values on and above the diagonal
-            tgt_mask = tgt_mask.bool()
+        src_inputs += self.pos_encoding(src_inputs)
 
+        if timesteps.dim() == 1:
+            timesteps = timesteps.unsqueeze(-1)
 
-        tgt_tokens = self.transformer(
-                src=src_inputs,
-                tgt=tgt_inputs,
-                tgt_mask=tgt_mask,
-        )
+        value_pred = torch.empty_like(timesteps,dtype=src_inputs.dtype)
 
-        idx = torch.arange(batch_size,device=tgt_tokens.device)
-        if timesteps.dim() != 1:
-            idx.unsqueeze_(-1)
+        for i in range(timesteps.size(-1)):
 
-        tgt_tokens = tgt_tokens[idx,timesteps.squeeze()]
+            src_key_padding_mask = torch.arange(src_inputs.size(1),device=timesteps.device).expand(batch_size,-1) > timesteps[:,i].unsqueeze(-1)
 
-        value_pred = self.critic_head(tgt_tokens)
+            tokens = self.transformer(
+                    src=src_inputs,
+                    src_key_padding_mask=src_key_padding_mask
+            )
+
+            idx = torch.arange(batch_size,device=tokens.device)
+            tokens = tokens[:,0] # TODO: add pooling + concat ===> feed into head
+            value_pred[:,i] = self.critic_head(tokens).squeeze()
+
+        # value_pred = self.critic_head(tokens)
         return value_pred.squeeze()
 
 # TODO: nn.Module?

@@ -103,10 +103,17 @@ class PPOAgent(nn.Module):
              self.optimizer = self.init_optimizer(opt_cfg=net_cfg['optimizer'])
 
     def init_optimizer(self,opt_cfg) -> torch.optim.Optimizer:
+        
+        opt_cfg_ = dict(opt_cfg)
 
         if 'type' in opt_cfg.keys():
-            match 'type':
+            type = opt_cfg['type']
+            print(f'Using {type} optimizer')
+            match opt_cfg['type']:
                 case 'Adam':
+                    optimizer = torch.optim.Adam
+
+                case 'AdamW':
                     optimizer = torch.optim.AdamW
 
                 case 'SGD':
@@ -114,13 +121,14 @@ class PPOAgent(nn.Module):
 
                 case 'RMSProp':
                     optimizer = torch.optim.RMSprop
+            opt_cfg_.pop('type')
         
         else:
-            optimizer = torch.optim.AdamW
+            optimizer = torch.optim.RMSprop
 
         combined_params = list(self.model.parameters()) + list(self.embedding.parameters())
 
-        return optimizer(combined_params,**opt_cfg)
+        return optimizer(combined_params,**opt_cfg_)
 
 
     def load_model(self,eval_model_dir:Path,load_list:list):
@@ -179,14 +187,10 @@ class PPOAgent(nn.Module):
         embedded_state_step,embedded_segment_step = self.tokenize(states,segments,return_segments=True)
 
         value_preds = self.model.critic.forward(
-            src_inputs=embedded_segment_step,
-            tgt_inputs=embedded_state_step[:,:-1,:],
+            src_inputs=embedded_state_step[:,:-1,:],
             timesteps=timesteps,
-            src_key_padding_mask=masks
         )
 
-
-        
         next_values = value_preds[:,1:].detach()
         values = value_preds[:,:-1]
 
@@ -220,10 +224,10 @@ class PPOAgent(nn.Module):
 
         ) = env.get_training_state()
 
+
         t0 = datetime.now()
 
-        for _ in range(env.horizon):
-
+        for i in range(env.horizon):
             with torch.no_grad():
 
                 state_tokens, segment_tokens = self.tokenize(states,segments)
@@ -234,9 +238,9 @@ class PPOAgent(nn.Module):
                 )
             actions = torch.multinomial(policy,1).squeeze()
             probs = policy[torch.arange(policy.size(0)),actions]
-            
 
             new_states, _, rewards, done, new_action_masks, new_steps = env.step(actions)
+
             self.buf.push(
                 state=states,
                 policy=probs,
@@ -248,25 +252,30 @@ class PPOAgent(nn.Module):
             )
 
             if True in done:
-                new_states, new_action_masks = env.reset(done) # Only reset where done is True
                 self.buf.solution_buf[:,-2] = new_states
                 self.buf.solution_buf[:,-1] = self.buf.solution_buf[:,0]
                 cost = self.pb.get_loss(self.buf.solution_buf)
 
+                ids = self.buf.solution_buf[:,:,2]
+
                 wandb.log(
                     {
-                        'Cost':cost.mean()
+                        'Cost':cost.mean(),
+                        'Rank Repartition':calculate_mean_rank(ids.int().cpu())
                     }
                 )
+
                 if torch.randint(3000,(1,)) == 49:
                     data = self.buf.solution_buf[0].cpu().detach().squeeze()
                     plt.scatter(data[:,0],data[:,1])
                     plt.plot(data[:,0],data[:,1])
 
+
                     plt.savefig(f'figs/sol_{self.update_counter}')
                     plt.clf()
 
-                self.buf.reset_sol()
+                new_states, new_action_masks = env.reset(done) # Only reset where done is True
+                
 
             
             action_masks = new_action_masks
@@ -279,11 +288,6 @@ class PPOAgent(nn.Module):
             step=steps,
         )
 
-
-        print(env.curr_step)
-
-
-        print(f"Rollout {self.update_counter} - log total gathered {torch.log10(torch.tensor(env.curr_step*states.size(0))):.2f} : {datetime.now()-t0}")
         self.update_counter += 1
 
 
@@ -345,8 +349,7 @@ class PPOAgent(nn.Module):
                 embedded_states, embedded_segments = self.tokenize(batch_solutions,env.segments[instance_ids],return_segments=True)
 
                 batch_values = self.model.critic(
-                    tgt_inputs=embedded_states,
-                    src_inputs=embedded_segments,
+                    src_inputs=embedded_states,
                     timesteps=batch_timesteps
                 )
 
@@ -374,9 +377,15 @@ class PPOAgent(nn.Module):
                 value_loss = F.mse_loss(batch_values.squeeze(-1), batch_returns) * self.value_weight
                 
                 # Calculate entropy bonus
-                entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1).mean()
+                # entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1).mean()
+                entropy = -(batch_policy * torch.log(batch_policy+1e-6)).sum(-1)
 
-                entropy_loss = -self.entropy_weight * entropy
+                max_entropy = torch.log(torch.logical_not(batch_action_masks).sum(-1))
+                max_entropy = max_entropy[torch.logical_not(batch_action_masks).sum(-1) != 1]
+                entropy = entropy[torch.logical_not(batch_action_masks).sum(-1) != 1]
+                rel_entropy = entropy / max_entropy
+
+                entropy_loss = -self.entropy_weight * rel_entropy.mean()
                 # Compute total loss and update parameters
 
                 if self.train_cfg['separate_value_training']:
@@ -426,7 +435,7 @@ class PPOAgent(nn.Module):
                     print("bst",batch_states.min())
 
 
-        print("Update : ",datetime.now()-t0)
+        # print("Update : ",datetime.now()-t0)
 
         with torch.no_grad():
 
@@ -454,3 +463,19 @@ class PPOAgent(nn.Module):
 
 
         self.buf.reset()
+        self.buf.reset_sol()
+
+
+
+
+def calculate_mean_rank(tensor):
+    id_counts = torch.zeros(50)
+    id_index_sum = torch.zeros(50)
+
+    for row in tensor:
+        for index, id_ in enumerate(row):
+            id_counts[id_] += 1
+            id_index_sum[id_] += index
+
+    mean_ranks = id_index_sum / id_counts
+    return mean_ranks
