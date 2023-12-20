@@ -49,6 +49,7 @@ class PPOAgent(nn.Module):
         self.dim_embed = cfg['network']['dim_embed']
         self.cat_embedding_size = self.dim_embed
         net_cfg = cfg['network']
+        self.best_cost = 1e6
 
         if device is None:
             self.device = 'cuda' if torch.cuda.is_available()  else 'cpu'
@@ -264,6 +265,11 @@ class PPOAgent(nn.Module):
                         'Cost':cost.mean(),
                     }
                 )
+
+                if self.best_cost > cost.mean():
+                    self.best_cost = cost.mean()
+                    torch.save(self.model.state_dict(),'best_model.pt')
+                    
 
                 if torch.randint(3000,(1,)) == 49:
                     data = self.buf.solution_buf[0].cpu().detach().squeeze()

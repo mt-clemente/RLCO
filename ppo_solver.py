@@ -77,6 +77,4 @@ class RLCOSolver():
                     
         
         except KeyboardInterrupt:
-            pass
-
-        # TODO: save solution
+            torch.save(self.agent.model.state_dict(),"model.pt")
